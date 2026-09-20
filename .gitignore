@@ -1,0 +1,55 @@
+# ClawCrew
+# Shared workspace build and cache outputs
+node_modules/
+dist/
+*.zip
+uv.lock
+.vite/
+*.log
+pnpm-lock.yaml
+build/
+__pycache__/
+*.pyc
+.env
+.venv/
+.vscode/
+.claude/
+.superset/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.db
+.DS_Store
+.gstack/
+# Runtime agent data
+backend/data/
+backend/agent_data/
+ss-nodes.json
+.data/
+
+# Ignore Antigravity / Claude Code agent configurations
+.agent/
+.agents/
+_agent/
+_agents/
+
+# Internal docs
+/RELEASE_NOTES.md
+/.coaligneignore
+.agents/rules/deploy.md
+backend/tests/test_agent_api_live.py
+.omx/
+.coaligne/
+.clawith-local-designs/
+
+# Local generated and temporary artifacts
+/.tmp/
+/tmp/
+/outputs/
+/docs/internal/
+
+# Local Toolathlon benchmark harness (never commit or deploy)
+backend/app/scripts/toolathlon_benchmark.py
+backend/app/services/agent_runtime/benchmark/
+backend/tests/test_agent_runtime_benchmark.py
