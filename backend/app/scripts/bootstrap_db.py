@@ -23,6 +23,7 @@ import app.models.onboarding  # noqa: F401
 import app.models.org  # noqa: F401
 import app.models.participant  # noqa: F401
 import app.models.plaza  # noqa: F401
+import app.models.project  # noqa: F401
 import app.models.schedule  # noqa: F401
 import app.models.skill  # noqa: F401
 import app.models.system_settings  # noqa: F401

@@ -43,6 +43,7 @@ from app.models.session_context_state import SessionContextState  # noqa: F401
 from app.models.gateway_message import GatewayMessage  # noqa: F401
 from app.models.notification import Notification  # noqa: F401
 from app.models.tenant_setting import TenantSetting  # noqa: F401
+from app.models.project import Project, Repository  # noqa: F401
 from app.models.trigger_execution import TriggerExecution  # noqa: F401
 
 config = context.config
