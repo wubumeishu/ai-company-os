@@ -2,6 +2,8 @@
 
 - 交叉引用（2026-09-21）：本记录 §2 的 M-1 / M-2 / L-1 三处修正已由收口卡 **t_ba795cc8**（aco-builder，design-only 文档修正）应用进 gate 文档 `PHASE2A_PROJECT_DESIGN_V1.md`；行号引证已对照活体基线 d345f6c 核实。
 
+- **R1 出生模型 supersession 标记（t_6dcd8579，2026-09-21）**：本记录 §1.2 引用的 gate 文档旧约定"§E.3 步骤 4 之前不落 Project 实体 / 出生时刻 = 来源验证通过时刻"**已被 R1 出生模型取代**——现行设计下 Project 实体在 Intake 受理时（RECEIVED）即创建，"受理进行中"与"接管完成"（INITIALIZED）是同一实体的两个阶段，REJECTED 持久化在 Project 表本身。本记录中 M-1（git 来源挂起点 = RECEIVED/SOURCES_OK，非 BLOCKED）的结论不受影响且依旧成立；M-2 / L-1 亦不变。以下正文为 R1 修订前的历史审查快照，保留原文不回填。
+
 - 被审对象：`docs/PHASE2A_PROJECT_DESIGN_V1.md`（t_d222b4f8 产出，667 行，基线 d345f6c）
 - 审查方式：只读活体源码复核（本 worktree d345f6c）+ 全文逐节比对，不修改被审文档、不 commit。
 - 结论：**APPROVE（附 2 Medium + 1 Low 修正项，均不阻塞 2B 门槛，但 2B 卡落地前应修入文档）**
