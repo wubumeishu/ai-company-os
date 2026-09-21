@@ -137,7 +137,8 @@ Project
    与 `services/group_file_service.py` 的 group 文件修订路径消费；
    未来项目级共享可先走 group scope，无需推翻现有 agent scope 机制。
 4. **V1 的风险 5 缓解（多 Agent 改同一项目文件）**：B 下各 Agent 是独立副本，
-   并发写同一项目文件会产生分歧。V1 的约定（`DESIGN PROPOSAL`）：
+   并发写同一项目文件会产生分歧。V1 的约定（`DESIGN PROPOSAL`，**注意：本条只定义 Project 层
+   调度策略，不依赖、也不宣称任何锁机制已实现该策略；两者的区分见 §B.4**）：
    **同一时刻一个 Project 只有一个活跃执行 Agent（单写者）**；
    多 Agent 并行写同一项目物料是 C 引入快照分发之后才允许打开的场景。这是边界约定，不是 A 式共享物理空间。
 
@@ -185,6 +186,48 @@ Project 只是物料的来源方。这是与"模型 A（Project 拥有 Workspace
 **现状复用，字段不动**。两层之间唯一的连接是"物料分发 + 任务归属引用"，
 不存在 Project→Workspace 的物理归属，也不存在 Project→git 字段硬绑。
 
+### B.4 决议三：Workspace Lock（`FACT`）与 Project Single Writer（`DESIGN PROPOSAL`）——两个必须分开的概念
+
+> 本节是"Problem 4"的定稿：把**运行时的文件/工作区锁**（现状事实）与**项目级单写者调度策略**
+> （V1 设计提案）钉死为两个正交概念，防止后续卡片/读者把二者混为一谈。
+
+| 维度 | **Workspace Lock**（运行时冲突控制） | **Project Single Writer**（项目级调度策略） |
+|---|---|---|
+| 状态 | `FACT`：**已实现的现状机制**（Clawith 活体源码） | `DESIGN PROPOSAL`：**V1 设计约定，未实现**，随 Phase 2B 才有载体 |
+| 层级 | 运行时 / 存储层：文件与编辑动作 | 业务 / 调度层：Project 的生命周期推进 |
+| 控制对象 | 单个工作区文件/路径的**编辑冲突**（谁此刻在改这个文件） | 一个 Project 的**执行者名额**（此刻哪个 Agent 有权推进该项目） |
+| 粒度 | per-(agent\|group) scope + per-path | per-Project |
+| 作用方式 | 抢占即阻塞：拿不到锁的本**次操作**失败/等待 | 拒绝并指向当前执行者：第二个 Agent 的请求**根本不允许进入 EXECUTING**（§G.3 规则 3） |
+| 生命周期 | 毫秒~秒级（Redis TTL 默认 60s；编辑锁带心跳/过期） | 与 Project 状态机绑定（EXECUTING 期间持有，BLOCKED 释放后方可再入） |
+| 代码落点 | 见下"FACT 证据"列 | **无代码落点**——V1 无 Project 实体、无调度器；它是 2B 落地 Intake/状态机时才实现的约定 |
+
+**FACT 证据（Workspace Lock 现状，附录 C-3/C-11 已复核）：**
+
+1. **Redis 短锁**：`services/workspace_locking.py`（全文 91 行）——
+   `acquire_workspace_lock(agent_id, path, ttl_seconds=60, …)` 以
+   `tenant:{t}:workspace-lock:{agent_id}:{path}` 为键做 `SET NX EX` 抢占，
+   `workspace_locks` 上下文管理器批量抢占、逆序释放；失败即 `RuntimeError("Workspace lock busy: …")`。
+   **作用域是 (agent, path)，且 agent 内互斥——它不是跨 Agent 的锁，更没有 Project 维度。**
+2. **持久编辑锁**：`models/workspace.py:71-107` `WorkspaceEditLock`（"Short-lived lock while a
+   human is actively editing a workspace file"）——`scope_type IN ('agent','group')` +
+   `user_id` + 心跳/过期；由 `services/workspace_collaboration.py` / `group_file_service.py` 的
+   group 修订/锁路径消费（附录 C-3）。它是**人正在编辑某文件**的冲突控制，与"项目谁来执行"无关。
+
+**关键裁定（防混淆三条，2B 与后续所有卡片必须遵守）：**
+
+1. **Workspace Lock 存在 ≠ Single Writer 已实现。** 锁机制只回答"此刻这个文件有没有人
+   正在写"；它**不阻止**第二个 Agent 被调度进同一个 Project 的 EXECUTING，也**不拥有**
+   Project 的任何状态。Single Writer 是项目状态机（§C）层面"同时只有 1 个活跃执行 Agent"的
+   调度约定，V1 阶段它**只是约定，不是机制**——没有实体、没有调度器、没有拒绝路径的代码。
+2. **Single Writer 的落地载体是 §C 的 EXECUTING 状态 + 执行 Agent 记录**（"进入 EXECUTING
+   时记录执行 Agent"），不是复用 Workspace Lock。2B 实现 Intake 状态机时，单写者判定必须发生在
+   Project 状态推进处；Workspace Lock 只在"Agent 内部真的去改工作区文件"那一刻才介入。
+   两者即使将来同时生效，也是**不同层、不同粒度、不同 owner**，不得把其中任何一方的行为
+   当作另一方的实现证据。
+3. **命名纪律**：本文（及 2B 代码/文档）里"Workspace Lock / 工作区锁"一律指上表左列的
+   现状机制；"Project Single Writer / 项目单写者 / 单写者约定"一律指右列的 V1 调度策略。
+   任何把左列机制描述为"已实现单写者"的表述都是**错误**，必须改写。
+
 ---
 
 ## C. 生命周期（整合自 PROJECT_INTAKE_V1 §4）
@@ -225,13 +268,15 @@ REJECTED ← 终态
 | 3 | `INITIALIZED` | 实体建成，可被分配、可开始流转 |
 | 4 | `ANALYZING` | 深度分析中（V1 只定义边界，见 §G.4） |
 | 5 | `PENDING_CONFIRMATION` | 等老板确认，人工门 |
-| 6 | `EXECUTING` / `BLOCKED` | 执行中 / 执行阻塞（单写者约定：同时只有 1 个活跃执行 Agent） |
+| 6 | `EXECUTING` / `BLOCKED` | 执行中 / 执行阻塞（Project 单写者约定：同时只有 1 个活跃执行 Agent；这是 §B.4 的调度约定，**不是**既有锁机制） |
 | 7 | `COMPLETED` / `ARCHIVED` / `REJECTED` | 终态组 |
 
 约定（不可违反）：
 
-- **EXECUTING 单写者**（§B.2 决议沿用）：进入 EXECUTING 时记录执行 Agent，
+- **EXECUTING 单写者**（§B.2 决议沿用，§B.4 定义）：进入 EXECUTING 时记录执行 Agent，
   同一 Project 同时只有 1 个活跃执行 Agent；BLOCKED 释放后才可再进 EXECUTING。
+  这是 **Project 调度策略（`DESIGN PROPOSAL`）**，由状态机自身执行；
+  与既有 Workspace Lock（`FACT`，§B.4 / 附录 C-3/C-11）正交，不得互为实现证据。
 - **REJECTED 带原因码**（§G.3），不是黑洞：被拒项目保留记录与原因，可人工重建新 Intake。
 - **BLOCKED 必须有 blocker 描述 + 期望解除条件**，否则不许挂起（防"永久阻塞"假状态）。
 
@@ -366,7 +411,7 @@ IntakeCommand = {
   （`services/storage_runtime/facade.py:30`；接口 `storage_runtime/base.py:51-77`，本卡 §附录 C-9 已复核），
   key 前缀经 `agent_storage_prefix(agent_id)`（`storage_runtime/utils.py:19-21`）
   ——与 Agent 种子初始化（`agent_tools.py:1653-1673`，附录 C-1）走同一条物理路径，**零 Runtime 改动**。
-- 分发的目标 Agent 集合 = 当时被指派的 Agent（V1 单写者下通常 1 个）；分发结果（写了哪些 key）留痕在 Intake 审计记录里。
+- 分发的目标 Agent 集合 = 当时被指派的 Agent（V1 Project 单写者下通常 1 个，§B.4）；分发结果（写了哪些 key）留痕在 Intake 审计记录里。
 - Run 级临时物料化（`TempWorkspace`，`agent_tools.py:1689-1705`，附录 C-4）是**执行环节**的既有行为，
   与 Intake/分发互不重叠：分发写持久存储，TempWorkspace 是 Run 沙箱的物化。
 
@@ -499,13 +544,13 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
   Squad 复用此既有契约，共享空间走 group scope，
   不新建 Department、不新建 Manager 实体、不动 A2A 路径。
 - **接入方式（目标模型）**：Project 持有 squad 成员引用（`agent_id` 集合 + 角色标签），
-  协作走既有 A2A / group 原语；Squad 的"并写同一项目物料"仍受 §B.2 单写者边界约束
-  （要真正并写需先引入 §B.2 模型 C 的快照分发）。
+  协作走既有 A2A / group 原语；Squad 的"并写同一项目物料"仍受 §B.2 Project 单写者边界约束
+  （要真正并写需先引入 §B.2 模型 C 的快照分发；单写者 = §B.4 的调度策略，与既有 Workspace Lock 无关）。
 - **V1 边界**：§E.5 已把"自动组队/自动指派"列为非目标；§D.2 把 `project_lead_agent_id` 等指派字段
   列入 Future。所以 V1 **只定义 Squad 概念边界与"复用 Group 原语"的接入约定，不建表、不自动组队**。
 
 **给 Phase 2B 的门槛**：Squad 实体化是 2B 之后的"多 Agent 协作"能力，
-落地时挂 Project 成员引用 + 复用 group scope，**禁止**新建 Department 或 Manager 实体来绕过 §B.2 单写者边界。
+落地时挂 Project 成员引用 + 复用 group scope，**禁止**新建 Department 或 Manager 实体来绕过 §B.2 Project 单写者边界（§B.4）。
 
 ### G.3 REJECTED 原因码集合 + 重试策略（两份源文档"需整合卡定稿"项）
 
@@ -528,7 +573,8 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
    **即：码本身不变，变的是"还在重试窗口内"还是"已超限落终态"这个迁移条件。**
 2. **`REJECTED` 是终态，带原因码 + 原因描述**，可人工重建新 Intake，但系统不自动重试 REJECTED。
 3. **单写者冲突**（第二个 Agent 请求进 EXECUTING）：**不属于上面 5 个原因码**——
-   它是约定级冲突，处理 = "拒绝该请求并指向当前执行者"，不是来源/分发失败，不落 REJECTED 也不落 BLOCKED。
+   它是约定级冲突（§B.4 的 Project 单写者策略，由状态机自身执行，与既有 Workspace Lock 无关），
+   处理 = "拒绝该请求并指向当前执行者"，不是来源/分发失败，不落 REJECTED 也不落 BLOCKED。
 4. **可重试的失败不拖 Project 状态倒退**：验证重试留在 RECEIVED/SOURCES_OK 之前；
    分发失败落 BLOCKED（独立动作，§E.4）。
 5. **closed-set 扩展**：新增原因码必须走整合卡 + 一致性审查（t_5b1293ab），不允许实现侧私自加码。
@@ -574,7 +620,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 |---|---|---|---|
 | 1 | "Git / clone_url / branch / commit 放哪里？" | **不进 Project 本体**；独立 Repository 实体持有来源事实，Project 只持引用集合。来源迁移（github→gitlab→zip）时事实跟 Repository 走，Project 不动。 | §B.1 / §D.3 |
 | 2 | "workspace / 项目工作目录放哪里？" | **Project 不拥有物理工作区**（模型 B）。物料由 Intake 分发进各参与 Agent 的既有 `{agent_id}/` 子树，零 Runtime 改动。 | §B.2 / §E.4 |
-| 3 | "Agent 怎么加入一个项目？" | V1 **不自动组队**；目标模型 Squad 复用现有 Group 原语（group scope），Project 持成员引用。单写者边界不变。 | §G.2 |
+| 3 | "Agent 怎么加入一个项目？" | V1 **不自动组队**；目标模型 Squad 复用现有 Group 原语（group scope），Project 持成员引用。Project 单写者边界不变（§B.4）。 | §G.2 / §B.4 |
 | 4 | "Task 怎么和 Project 关联？" | **V1 不动 Task 表、不建任务图**；目标模型三段式 Work Item（中间层），归属用新引用表达，禁止给 Task 表加 project 字段。 | §G.1 |
 | 5 | "项目知识 / 分析结果放哪里？" | **绝不回写 Project 本体**：技术栈/目录/依赖/风险 → Analysis Artifact；长期事实 → Project Knowledge（独立对象，挂 project_id 引用）。 | §G.4 / §D.3 |
 | 6 | "Project 和 Repository 是什么关系？" | **1 Project → N Repository（N≥0）**。一个项目可以 0/1/N 个仓；1:1 被"偷偷硬绑定"警告排除。 | §B.1 |
@@ -584,9 +630,10 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | 10 | "不同来源（github/zip/local/document）身份怎么统一？" | **来源未验证不落 Project 实体**；Project 出生时刻 = 来源验证通过时刻，身份 = "已验证来源 + 业务目标"（§E.3 关键约定）。 | §E.3 / §G.3 |
 | 11 | "github/gitlab 现在接不进（无 git 能力）怎么办？会不会误报已接入？" | 枚举先行、能力后补：git 系来源 V1 只登记 locator，验证挂起 → 真实项目挂在 **RECEIVED/SOURCES_OK**（带 source=git/pending-verifier 标记），等待 2B 首批 git 获取能力落地；有界 `SOURCE_UNREACHABLE` 重试超限后按 §G.3 升级为终态 REJECTED 而非误报已接入（"缺 git 能力"是环境能力缺口，不是 5 个封闭原因码之一，也不产生 BLOCKED 迁移）；补 git 能力时**生命周期形状零改动，只加验证器**（§F.3 / §I）。 | §F.3 / §F.4 / §I |
 | 12 | "来源失败该重试还是该拒？" | **封闭原因码集 + 明确的 transient/permanent 属性 + 有界重试上限**（§G.3），码不变、迁移条件决定终态。 | §G.3 |
+| 13 | "Workspace Lock 和 Project Single Writer 是一回事吗？会不会把锁当成单写者已实现？" | **两个正交概念，§B.4 钉死区分**：Workspace Lock = `FACT` 现状（per-agent/per-path 的运行时文件编辑冲突控制，Redis 短锁 + 持久编辑锁，无 Project 维度）；Project Single Writer = `DESIGN PROPOSAL` 调度策略（V1 未实现，载体是 §C 状态机本身）。**锁机制存在不蕴含单写者已实现**，命名纪律见 §B.4 关键裁定 3。 | §B.4 / 附录 C-3/C-11 |
 
-**结论**：上表 12 条歧义全部已被 §A–§G 的设计消解。
-只要这 12 条成立，"现在就建 `projects` 表"就会立刻在 #1（git 字段）、#4（Task 字段）、#5（分析 JSON）
+**结论**：上表 13 条歧义全部已被 §A–§G 的设计消解。
+只要这 13 条成立，"现在就建 `projects` 表"就会立刻在 #1（git 字段）、#4（Task 字段）、#5（分析 JSON）
 三处被迫做硬决策而返工——**这就是"为什么先设计不写代码"的可核验版本**：
 设计把这些硬决策提前到了 §B/§G，且每一条都有 `FACT` 依据或明确的 `DESIGN PROPOSAL` 理由，
 编码者 2B 时无需再判断"放哪"。
@@ -599,7 +646,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 
 ### I.1 进入 2B 的门槛条件（必须全部成立）
 
-1. §H 的 12 条歧义已由 §A–§G 消解（本文完成）。
+1. §H 的 13 条歧义已由 §A–§G 消解（本文完成）。
 2. §G.1（任务图）、§G.2（Squad）、§G.3（原因码集 + 重试策略）三个开放项已由整合卡裁定（本文完成）。
 3. 一致性审查（t_5b1293ab）确认：本设计的 Project/Workspace 模型不破坏现有 AgentRun / Workspace / File 存储机制，
    Intake 边界清晰（不渗入 Analysis / Execution），7 状态机可在现有 Durable Agent Run 架构内实现且**不需要**
@@ -628,7 +675,8 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 
 ## 附录 C. FACT 证据清单（本文引用的全部代码证据 + 本卡复核结论）
 
-> 下表汇总两份源文档 §附录 的 1–9 号证据，并附本卡（t_d222b4f8）在 worktree `d345f6c` 上逐条复核的结论。
+> 下表汇总两份源文档 §附录 的 1–9 号证据，并附本卡（t_d222b4f8）在 worktree `d345f6c` 上逐条复核的结论；
+> C-10/C-11 为本卡（Problem 4 卡 t_f95e046e）新增的复核证据（Workspace Lock 现状 + 与 Project 单写者的正交性）。
 > 复核方式：只读活体源码（Agent/Task/Workspace/Storage/Git 模块）+ 全仓 grep。
 
 | # | 陈述 | 证据（文件:行） | 本卡复核结论 |
@@ -643,6 +691,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | C-8 | 全仓不存在 Project 域实体 / project 表 / Project Intake | `docs/PHASE1_CLAWITH_CAPABILITY_AUDIT.md` §8 + 全仓 grep `class Project\|__tablename__="projects"\|project_id` | ✅ 复核（**关键陷阱**）：`project_id`/`projects` **有命中但全部是外部集成元数据，非 Clawith 域 Project 实体**：① `services/agent_tools.py:25957 _get_vercel_quota_summary` 调 `api.vercel.com/v9/projects`（Vercel/Neon 部署助手读外部平台项目）；② `services/agent_runtime/tool_result_store.py:53` 与 `tool_execution.py:155` 的 `project_id/project_name` 是工具结果的**通用元数据追踪字段**（与 `database_name/region/git_ref/linked_repo` 并列，记录"这次工具操作动了外部项目的什么"），非域实体；③ 无 `class Project`、无 `projects` 表、无 Project Intake 服务（grep `project_intake\|intake_project` 零命中）。→ **Project 域实体 = MISSING 成立，且"看起来像 Project 字段"的 `project_id` 已被识别并排除** |
 | C-9 | 物料写入的物理通道（分发实现载体，已存在）：存储 facade + write 接口 + key 前缀 | `services/storage_runtime/facade.py:30 get_storage_backend` + `base.py:51-77 StorageBackend`（write_bytes/write_text/read_bytes/list_dir）+ `utils.py:19-21 agent_storage_prefix/tenant_storage_prefix` + `utils.py:4-16 normalize_storage_key`（拒绝 `..`） | ✅ 命中：`get_storage_backend()` 单例 facade；`StorageBackend` 接口完整；`agent_storage_prefix(agent_id)` / `tenant_storage_prefix=enterprise_info_{tenant_id}`；`normalize_storage_key` 显式 pop `..` 段 |
 | C-10 | 无 git 仓库接入能力；唯一形近命中 `_clone_workspace_to_staging` 是目录 staging 复制，非 git | `services/sandbox/local/subprocess_backend.py:808-822` | ✅ 命中：`_clone_workspace_to_staging` 用 `shutil.copy2`/`shutil.copytree` 把 work_path 复制到暂存 temp_dir（跳过 .venv/.tmp/_exec_tmp），**纯目录复制，无任何 git 语义**；全仓 `git clone\|pull_repo\|fetch_repo\|clone_url` 零命中 |
+| C-11 | Workspace Lock 是运行时文件/编辑冲突控制（per-agent/per-path，无 Project 维度），**不构成任何 Project 级单写者机制** | `services/workspace_locking.py`（全文 91 行，Redis `SET NX EX` 短锁，键 `tenant:{t}:workspace-lock:{agent_id}:{path}`，TTL 默认 60s）+ `models/workspace.py:71-107`（`WorkspaceEditLock`：`scope_type IN ('agent','group')` + `user_id` + 心跳/过期） | ✅ 命中：Redis 锁的键空间只有 (tenant, agent, path) 三元组，**全仓 grep 无 `project` 维度**；编辑锁绑定 user 编辑会话（"Short-lived lock while a human is actively editing a workspace file"），消费者为 `workspace_collaboration.py` / `group_file_service.py` 的 group 修订/锁路径（C-3）。→ **既有锁 = `FACT` 现状；Project Single Writer = §B.4 的 `DESIGN PROPOSAL`，二者正交，锁的存在不蕴含单写者已实现** |
 
 ### 本卡复核说明（方法与边界）
 
@@ -663,10 +712,10 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 
 ## 本文作为 2B gate 的最终判定
 
-- **§H 的 12 条歧义已全部由 §A–§G 消解**：#1 git 字段→独立 Repository；#2 工作区→模型 B 分发；
+- **§H 的 13 条歧义已全部由 §A–§G 消解**：#1 git 字段→独立 Repository；#2 工作区→模型 B 分发；
   #3 Agent 加入→Squad 复用 Group 原语（不自动组队）；#4 Task 关联→三段式 Work Item（V1 不动 Task 表）；
   #5 分析结果→Artifact/Knowledge 独立对象（不回写 Project）；#6–#7 关系→1:N≥0；#8 分析数据→非 Project；
-  #9 运行环境→Workspace；#10 来源身份→"验证通过才落实体"；#11 git 缺口→RECEIVED/SOURCES_OK 挂起（pending-verifier）不误报、有界重试超限→REJECTED；#12 失败策略→封闭原因码 + 有界重试。
+  #9 运行环境→Workspace；#10 来源身份→"验证通过才落实体"；#11 git 缺口→RECEIVED/SOURCES_OK 挂起（pending-verifier）不误报、有界重试超限→REJECTED；#12 失败策略→封闭原因码 + 有界重试；#13 **Workspace Lock ≠ Single Writer**→§B.4 钉死两概念正交（锁 = `FACT` 运行时冲突控制；单写者 = `DESIGN PROPOSAL` 调度策略，V1 未实现）。
 - **三个整合开放项（§G.1 任务图 / §G.2 Squad / §G.3 原因码+重试）已定稿**，2B 无需重辩。
-- **9 条 FACT 已对照活体源码复核通过**，并识别并排除了 2 处"形似 Project/形似 git"的陷阱（C-8 / C-10）。
+- **11 条 FACT 证据（C-1~C-11）已对照活体源码复核通过**，并识别并排除了 2 处"形似 Project/形似 git"的陷阱（C-8 / C-10）；C-11 额外钉死"既有锁机制不构成 Project 单写者实现"。
 - **门槛**：满足 §I.1 四条 + 通过一致性审查（t_5b1293ab）后，方可进入 §I.2 的 2B 首批（git 获取 + 三验证器 + Project/Repository 表 + Intake 服务，Task 表零改动）。
