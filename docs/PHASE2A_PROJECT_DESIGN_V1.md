@@ -58,7 +58,7 @@ Intake 该做什么不该做什么"，并把所有歧义在设计层消解掉；
 
 | 容易犯的混淆 | 为什么不是 |
 |---|---|
-| Project ≠ Repository | 仓库是"代码资产在哪、怎么获取"；Project 是"公司负责的那件事"。一个项目可以没有 git 仓库（V1 允许来源为本地文件夹/文档），也可以有多个仓库。`DESIGN PROPOSAL` |
+| Project ≠ Repository | 来源/资产登记对象是"物料在哪、怎么取"；Project 是"公司负责的那件事"。一个项目可以没有 git 仓库（V1 允许来源为本地文件夹/文档），也可以有多个。`DESIGN PROPOSAL`（命名边界见 §F.1a：Repository ≠ 一定是 Git 仓库） |
 | Project ≠ Workspace | 工作区是**某个员工名下**的干活空间（`FACT`：存储子树以 agent_id 为前缀，见 §B.2 / 附录 C-1/C-2）。Project 不拥有物理工作区。`DESIGN PROPOSAL` |
 | Project ≠ Execution | 执行是一次具体的干活过程（= 一次 AgentRun）。Project 是跨多次执行的业务对象。`DESIGN PROPOSAL` |
 | Project ≠ Task | Task 是"指派给一个员工的一件活"；Project 是"公司接的那一单"。V1 不改动 Task 表。`DESIGN PROPOSAL` |
@@ -70,7 +70,7 @@ Intake 该做什么不该做什么"，并把所有歧义在设计层消解掉；
 | 概念 | 一句话（小白版） | 在系统里是什么 |
 |---|---|---|
 | **Project** | 公司正在负责的一件完整事情 | 未来新增的业务实体（V1 尚未实现）。它是"那一单"的档案。 |
-| **Repository** | 这件事的代码/资产在谁那里、怎么拿到 | 未来新增的资产登记对象（V1 尚未实现）。它描述**来源**（github/gitlab/zip/本地目录…），不绑定某一项目。 |
+| **Repository** | 这件事的代码/资产在谁那里、怎么拿到 | 未来新增的**来源/资产登记对象**（V1 尚未实现）。它描述**来源**（github/gitlab/zip/本地目录…），不绑定某一项目；**不保证底层一定是 Git 仓库**（命名边界见 §F.1a）。 |
 | **Workspace** | 某个员工真正动手工作的地方 | 已存在：每个 Agent 的存储子树 `{STORAGE_LOCAL_ROOT}/{agent_id}/` + 每次 Run 的临时物料化目录。`FACT`（附录 C-1/C-4）。 |
 | **Execution** | 员工某一次真正干活的完整过程 | 已存在：一次 AgentRun（含 checkpoint、工具执行、验证、投递）。`FACT`（`docs/PHASE1_CLAWITH_CAPABILITY_AUDIT.md` §2/§4）。 |
 
@@ -83,6 +83,8 @@ Workspace/Execution 是"人与过程"（运行时层，今天已存在）。**
 ## B. 实体关系决议（整合自 PROJECT_DOMAIN_V1 §4–§5）
 
 ### B.1 决议一：Project ↔ Repository —— `DESIGN PROPOSAL`：**1 Project → N Repository（V1 中 N ≥ 0）**
+
+> 命名边界（§F.1a，`DESIGN PROPOSAL`）：`Repository` = 项目的**来源/资产登记对象**（Source/Asset Registry Object），**不保证**是 Git 仓库；只有 `source_type ∈ {github, gitlab, local_git}` 才是 Git 系来源，`zip/local_folder/document/manual` 是非 Git 来源资产。
 
 逐条回答根任务 §八 的六个问题：
 
@@ -149,10 +151,10 @@ Project
 
 ```text
 Project
- ├─ Repository × N          （资产登记，来源事实）
+ ├─ Repository × N          （来源/资产登记，来源事实；§F.1a：不保证是 Git 仓库）
  └─ （不拥有物理 Workspace）
        │
-       Intake 分发（未来的服务动作，非实体关系）
+       Project Materialization（§E.6，未来的服务动作，非实体关系；即原"Intake 分发"）
        ▼
  Agent 的 Workspace × M      （每个参与 Agent 一份项目物料副本，写入既有 {agent_id}/ 子树）
        │
@@ -174,7 +176,7 @@ Project 只是物料的来源方。这是与"模型 A（Project 拥有 Workspace
         ▼
   Project ──────────────────────────────
    │    （公司负责的"那件事"，业务层一等公民）
-   ├── Repository × N（≥0）  ← 资产来源登记（github/local/zip/document/manual）
+   ├── Repository × N（≥0）  ← 来源/资产登记（github/local/zip/document/manual；§F.1a：不保证底层是 Git 仓库）
    ├── Project Knowledge（V1 非目标，未来，见 §G.4）
    └── 项目任务（未来任务图；V1 不动 Task 表，见 §G.1）
                     │
@@ -186,7 +188,7 @@ Project 只是物料的来源方。这是与"模型 A（Project 拥有 Workspace
 ```
 
 要点：左列（Project/Repository）是 **Phase 2B 新增**；右列（Agent/Task/Run/Workspace）是
-**现状复用，字段不动**。两层之间唯一的连接是"物料分发 + 任务归属引用"，
+**现状复用，字段不动**。两层之间唯一的连接是"Materialization（§E.6，物料进 Agent 区）+ 任务归属引用"，
 不存在 Project→Workspace 的物理归属，也不存在 Project→git 字段硬绑。
 
 ---
@@ -311,6 +313,10 @@ created_at / updated_at / status_changed_at
 | **Project Analysis** | 深度代码/文档分析：技术栈、依赖、启动方式、风险 | Analysis Artifact（独立对象，不塞进 Project 本体） | 只定义边界（§G.4），不实现 |
 | **Project Execution** | 真正的干活 | Task → AgentRun（现有链路） | 现有能力，归 Phase 2B+ |
 
+> **补充（§E.6）**：Intake 产出"已验证来源记录"、Execution 在"可执行工作环境"里干活，两者之间还夹着一个
+> 轻量环节 **Project Materialization（物料化）**——把已验证物料物化进参与 Agent 的既有工作区。它**不同于**
+> Intake（接项目）、Analysis（看项目）、Execution（做项目）三者；输入/输出/负责边界见 §E.6。
+
 风险 4（根任务 §二十一）的防线就在这一刀：**Intake 的退出条件里不含任何"理解项目内容"的动作**。
 `FACT` 依据：当前系统里"理解项目"只可能由 Agent 在 Run 内经 `execute_code` 手动做
 （`services/sandbox/`，7 个后端）——那是员工行为，不是系统 Intake 的职责。
@@ -365,7 +371,7 @@ IntakeCommand = {
 ### E.4 Workspace 初始化边界（承接 §B.2 模型 B）
 
 - **Intake 不创建任何物理工作区。** Project 不拥有工作区（§D.3 Excluded 第 2 条）。
-- **物料分发是 Intake 之后的显式动作**：把"已验证来源的物料"复制进**参与 Agent 的既有 `{agent_id}/` 子树**。
+- **Project Materialization（物料化，§E.6；即原"物料分发"）是 Intake 之后的显式动作**：把"已验证来源的物料"复制进**参与 Agent 的既有 `{agent_id}/` 子树**。
   `FACT` 落点：写入经 `get_storage_backend().write_bytes/write_text`
   （`services/storage_runtime/facade.py:30`；接口 `storage_runtime/base.py:51-77`，本卡 §附录 C-9 已复核），
   key 前缀经 `agent_storage_prefix(agent_id)`（`storage_runtime/utils.py:19-21`）
@@ -374,7 +380,7 @@ IntakeCommand = {
 - Run 级临时物料化（`TempWorkspace`，`agent_tools.py:1689-1705`，附录 C-4）是**执行环节**的既有行为，
   与 Intake/分发互不重叠：分发写持久存储，TempWorkspace 是 Run 沙箱的物化。
 
-边界一句话：**Intake 管"登记与验证"，分发管"物料进 Agent 区"，TempWorkspace 管"Run 内物化"。三段各归各位。**
+边界一句话：**Intake 管"登记与验证"，Materialization（§E.6）管"物料进 Agent 区"，TempWorkspace 管"Run 内物化"。三段各归各位。**
 
 ### E.5 Intake 明确不做的事（V1 非目标，根任务 §十五 + 补充）
 
@@ -382,9 +388,43 @@ IntakeCommand = {
 - ❌ 自动拆任务 / 自动建任务图（Task 表 V1 不动，§G.1）
 - ❌ 自动组队（Squad）/ 自动指派 Agent（§G.2）
 - ❌ 自动开始修改代码、自动部署、自动 Review
-- ❌ 物理项目工作区的创建（§E.4：分发 ≠ 建工作区）
+- ❌ 物理项目工作区的创建（§E.4/§E.6：Materialization ≠ 建工作区）
 - ❌ 共享物理空间 / 多 Agent 并行写（模型 A/C，§B.2）
 - ❌ git 获取能力本身（github/gitlab/local_git 的可达验证依赖它，§F.3 Phase 2B 首批）
+
+### E.6 Project Materialization（物料化）—— Intake 与 Execution 之间的轻量概念（`DESIGN PROPOSAL`）
+
+> 新增概念。仅定义**输入 / 输出 / 负责边界**，**不实现、不建表、不建 API**
+>（根任务 §问题3 的优先目标：补一个非常轻量的概念，钉死"物料分发由哪个逻辑环节负责"）。
+
+**定义**：Project Materialization = 把**已验证来源**中的项目物料，准备成 Agent 可以实际工作的材料
+（写入参与 Agent 的既有 `{agent_id}/` 工作区子树，物理通道经 §E.4 的存储 facade，零 Runtime 改动）。
+
+三段职责（必须拆开，各归各位）：
+
+| 环节 | 一句话 | 负责什么 | 产出 |
+|---|---|---|---|
+| **Project Intake** | 接项目 | 登记 + 验证来源 + 初始化实体 | Project + Repository 记录（已验证，§E.2） |
+| **Project Materialization** | 让项目材料进入可执行工作环境 | 把已验证来源物料物化进参与 Agent 的既有工作区 | Agent 工作区里可读的项目物料副本 + 分发留痕（写了哪些 key） |
+| **Project Execution** | 真正开始干活 | 指派 Task → AgentRun | 交付物 / 证据 |
+
+**输入 / 输出 / 负责边界（本概念的全部契约，不含实现）：**
+
+- 输入：Project + Repository 记录（status ≥ SOURCES_OK，来源已验证）+ 目标 Agent 集合（V1 单写者下通常 1 个，§B.2）。
+- 输出：写入各参与 Agent 既有 `{agent_id}/` 子树的项目物料 + 分发审计留痕。
+- 负责边界：Materialization **只负责"物料就位"**——把已验证物料放进 Agent 能读到的地方；
+  **不负责**"理解/分析物料"（Analysis，§G.4）与"在物料上干活"（Execution，AgentRun）。
+  失败落点 = 原因码 `DISTRIBUTION_FAILED`（§G.3，transient、独立可重发、不拖 Project 状态倒退）。
+
+**归属澄清（根任务 §问题3 必须写明）：**
+
+- Materialization **不属于 Project 实体本身**：它是 Intake 之后的一个**服务动作 / 逻辑环节**，
+  不是 Project 的字段或状态——Project 的 7 状态机（§C）**不含** Materialization 专属状态；
+  它完成后 Project 状态仍由 §C 决定（INITIALIZED / PENDING_CONFIRMATION / ANALYZING 之一）。
+- Materialization **不属于 Agent Run**：它在任何 Run 开始**之前**完成（是"让 Agent 能开工"的准备动作）；
+  Run 内的临时物料化是既有 `TempWorkspace`（§E.4 / 附录 C-4），属于执行环节，与 Materialization 互不重叠。
+- 与 `TempWorkspace` 的分工：**Materialization 写持久存储（Agent 工作区子树）；TempWorkspace 是 Run 沙箱的临时物化**
+  ——两段各归各位（§E.4 末句沿用）。
 
 ---
 
@@ -402,7 +442,31 @@ Repository = {
 ```
 
 - Intake 对 Repository 的全部职责 = **登记 + 验证**（§E.1 第 1/2 项）。
-- Repository 的"获取"（拉取/复制物料）是 Intake **之后**的动作，归"物料分发"（§E.4），不属于 Intake 本身。
+- Repository 的"获取"（拉取/复制物料）是 Intake **之后**的动作，归 **Project Materialization**（§E.6，原"物料分发"），不属于 Intake 本身。
+
+### F.1a 命名边界：Repository ≠ Git 仓库（消除命名歧义，`DESIGN PROPOSAL`）
+
+`Repository` 在本设计中**不是**"Git 仓库"的代名词，而是：
+
+```text
+Repository =
+项目"来源/资产"的登记对象（Source / Asset Registry Object）。
+它回答"这件事的物料来自哪里、怎么定位、怎么验证可达"。
+它不保证底层一定是 Git Repository。
+```
+
+§F.2 的 7 种 source_type 按"是否 Git 系"分两类（**仅为语义分组，不新增实体、不改模型形状**）：
+
+| 类别 | source_type | 语义 |
+|---|---|---|
+| 代码仓库型来源（Git 系） | `github` / `gitlab` / `local_git` | 指向一个 Git 仓库 / 工作树；验证可达依赖尚未存在的 git 获取能力（§F.3 / §F.4） |
+| 非 Git 来源资产 | `zip` / `local_folder` / `document` / `manual` | 指向本地文件 / 目录 / 文档 / 纯登记；验证只依赖文件可达性，**无需 git 能力** |
+
+约定（防止开发者误读）：
+
+- 看到 `Repository` 一词，**不得**默认"一定可以 `git clone`"；只有 `source_type ∈ {github, gitlab, local_git}` 才是 Git 系。
+- 本次**不**把 7 种来源拆成多个实体（不新增 GitRepo / Asset 等对象）——命名歧义靠"实体 = 来源登记对象 + source_type 分类"消解，**不靠增加模型复杂度**（根任务 §问题2 的优先目标）。
+- 与 §B.1 决议一致：N≥0 的 Project → Repository 引用不变；本注只钉死"Repository 这个词指什么"。
 
 ### F.2 逐 source_type 的验证动作（`DESIGN PROPOSAL`，受 §F.4 FACT 约束）
 
@@ -522,7 +586,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | `SOURCE_INVALID` | 文件损坏 / 结构非法 / 缺必填字段 | 命令校验 + 来源验证 | **permanent** | `REJECTED`（终态） |
 | `SECURITY_REJECTED` | 安全检查不过（如 zip-slip 路径穿越） | 来源验证（§G.5） | **permanent** | `REJECTED`（终态，不复用、不自动重试） |
 | `SOURCE_UNREACHABLE` | 凭据过期 / 网络**临时**不可达 | 来源验证 | **transient（有界重试）** | 重试期内**留在 RECEIVED/SOURCES_OK**（打 `pending-verifier` 标记 + 有界重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；**超限 → 升级为 `REJECTED`（原因码仍记 `SOURCE_UNREACHABLE`）** |
-| `DISTRIBUTION_FAILED` | 物料分发写存储失败 | 分发动作（§E.4） | **transient（独立可重发）** | `BLOCKED`（不拖 Project 状态倒退；已分发部分留痕可重发） |
+| `DISTRIBUTION_FAILED` | 物料分发写存储失败 | Materialization 动作（§E.6；物理通道 §E.4） | **transient（独立可重发）** | `BLOCKED`（不拖 Project 状态倒退；已分发部分留痕可重发） |
 
 **关键规则（防止"假重试"与"假终态"）**：
 
@@ -534,7 +598,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 3. **单写者冲突**（第二个 Agent 请求进 EXECUTING）：**不属于上面 5 个原因码**——
    它是约定级冲突，处理 = "拒绝该请求并指向当前执行者"，不是来源/分发失败，不落 REJECTED 也不落 BLOCKED。
 4. **可重试的失败不拖 Project 状态倒退**：验证重试留在 **RECEIVED/SOURCES_OK**（挂 `pending-verifier` 标记 + 有界 `SOURCE_UNREACHABLE` 重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；
-   分发失败落 BLOCKED（独立动作，§E.4）。
+   Materialization（§E.6；物理通道 §E.4）失败落 BLOCKED（独立动作）。
 5. **closed-set 扩展**：新增原因码必须走整合卡 + 一致性审查（t_5b1293ab），不允许实现侧私自加码。
 
 **"为什么现在不写代码"相关**：原因码集 + 重试属性是封闭契约，2B 实现 Intake/验证器时直接照此映射，
@@ -561,8 +625,8 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
    （`FACT`: `storage_runtime/utils.py:4-16` 拒绝 `..` 语义，附录 C-9）；zip 解包做 zip-slip 检查（§F.2）。
 2. **凭据不落 Project/Repository 记录**：git 来源的 token 走现有配置/密钥渠道（沿 backend 凭据惯例），
    Repository 只存 locator；验证记录存"验证过"，不存凭据值。
-3. **写入前缀隔离**：物料分发只能写 `{agent_id}/…` 前缀下（`FACT`: utils.py:19-21 +
-   `workspace_paths.py:51-87` 的跨 Agent 前缀阻断假设，附录 C-2/C-9）——分发动作不得绕过该前缀写其他 Agent 区。
+3. **写入前缀隔离**：Materialization（§E.6）只能写 `{agent_id}/…` 前缀下（`FACT`: utils.py:19-21 +
+   `workspace_paths.py:51-87` 的跨 Agent 前缀阻断假设，附录 C-2/C-9）——Materialization 不得绕过该前缀写其他 Agent 区。
 4. **拒绝是终态**：`REJECTED` + `SECURITY_REJECTED`（如 zip 内路径穿越）不复用、不自动重试（§G.3 规则 2）。
 
 ---
@@ -577,11 +641,11 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | # | 如果不设计就卡住的歧义 | 本文如何消解（设计决议） | 出处 |
 |---|---|---|---|
 | 1 | "Git / clone_url / branch / commit 放哪里？" | **不进 Project 本体**；独立 Repository 实体持有来源事实，Project 只持引用集合。来源迁移（github→gitlab→zip）时事实跟 Repository 走，Project 不动。 | §B.1 / §D.3 |
-| 2 | "workspace / 项目工作目录放哪里？" | **Project 不拥有物理工作区**（模型 B）。物料由 Intake 分发进各参与 Agent 的既有 `{agent_id}/` 子树，零 Runtime 改动。 | §B.2 / §E.4 |
+| 2 | "workspace / 项目工作目录放哪里？" | **Project 不拥有物理工作区**（模型 B）。已验证物料由 **Project Materialization（§E.6）** 准备进各参与 Agent 的既有 `{agent_id}/` 子树，零 Runtime 改动。 | §B.2 / §E.4 / §E.6 |
 | 3 | "Agent 怎么加入一个项目？" | V1 **不自动组队**；目标模型 Squad 复用现有 Group 原语（group scope），Project 持成员引用。单写者边界不变。 | §G.2 |
 | 4 | "Task 怎么和 Project 关联？" | **V1 不动 Task 表、不建任务图**；目标模型三段式 Work Item（中间层），归属用新引用表达，禁止给 Task 表加 project 字段。 | §G.1 |
 | 5 | "项目知识 / 分析结果放哪里？" | **绝不回写 Project 本体**：技术栈/目录/依赖/风险 → Analysis Artifact；长期事实 → Project Knowledge（独立对象，挂 project_id 引用）。 | §G.4 / §D.3 |
-| 6 | "Project 和 Repository 是什么关系？" | **1 Project → N Repository（N≥0）**。一个项目可以 0/1/N 个仓；1:1 被"偷偷硬绑定"警告排除。 | §B.1 |
+| 6 | "Project 和 Repository 是什么关系？" | **1 Project → N Repository（N≥0）**。一个项目可以 0/1/N 个来源；1:1 被"偷偷硬绑定"警告排除。命名边界：Repository = 来源/资产登记对象，**不保证是 Git 仓库**（§F.1a）。 | §B.1 / §F.1a |
 | 7 | "一个 Project 能不能有多个仓库？" | 能（N≥0），Vue 前端 + FastAPI 后端是同一件事的两个 Repository。 | §B.1 |
 | 8 | "项目分析结果是不是 Project 数据？" | 不是。分析结果是 Artifact/Knowledge 独立对象（§G.4），塞进 Project 是根任务风险 3。 | §G.4 / §D.3 |
 | 9 | "项目运行环境属于 Project 还是 Workspace？" | **属于 Workspace（现有 agent 作用域机制）**。Project 是业务层，不碰物理运行环境。 | §A.4 / §B.2 |
