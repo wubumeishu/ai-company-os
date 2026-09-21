@@ -1,6 +1,9 @@
 # PHASE2A_PROJECT_DESIGN_V1 — Phase 2A 正式设计（Project 基础模型 + Project Intake 边界）
 
 状态：**GATE DRAFT（整合设计稿，设计-only，未实现、无数据库、无代码变更）**
+R1 修订标记（t_6dcd8579，2026-09-21）：**Project 出生时刻裁定为 Intake 受理时（RECEIVED）**——Project 实体在受理时创建，
+`INITIALIZED` 标记"接管完成"；`REJECTED` 的持久化归属 = Project 表本身。全部"步骤 4 之前不落实体 /
+出生时刻 = 来源验证通过时刻"旧表述已在本修订中清除（`DESIGN PROPOSAL`）。
 基线：Clawith @45fc701c（本仓 `834d621`；本 worktree HEAD `d345f6c`）
 贡献分工：本文由 **t_d222b4f8 整合卡**产出，做四件事：
   1. 整合上游两份源文档 `docs/PROJECT_DOMAIN_V1.md`（t_e023caf7，§1–§7 概念地图 + 实体关系决议）
@@ -198,13 +201,15 @@ Project 只是物料的来源方。这是与"模型 A（Project 拥有 Workspace
 **7 个核心状态 + 3 个终态组**（`DESIGN PROPOSAL`；根任务 §十二 要求 6~8 个核心状态，本设计 7 个达标）：
 
 ```text
-RECEIVED            刚受理：已收到 IntakeCommand，实体未确认
+RECEIVED            出生：IntakeCommand 被受理且通过入口校验，Project 实体已创建
+                    （"受理进行中"，来源未验证）
         │
-        ├──(验证通过)──► SOURCES_OK
+        ├──(来源全部验证通过)──► SOURCES_OK
         │                     │
-        │                     └──► INITIALIZED      （Project + Repository 已建成）
+        │                     └──► INITIALIZED      （Project + Repository 已建成，"接管完成"）
         │
         └──(验证失败, 不可修复)──► REJECTED      ← 终态：输入不可修复 / 安全检查不过
+                                                 （持久化在 Project 表，带原因码 + 原因描述）
 
 INITIALIZED
         ├──► ANALYZING               （深度分析中，未来环节，见 §G.4）
@@ -226,9 +231,9 @@ REJECTED ← 终态
 
 | 状态 | 命名 | 说明 |
 |---|---|---|
-| 1 | `RECEIVED` | 刚接进来，只有命令，没有已验证实体 |
+| 1 | `RECEIVED` | **Project 实体已出生**（受理时创建）：只有业务意图 + 来源登记，来源验证进行中（"受理进行中"，非"已完成接管"） |
 | 2 | `SOURCES_OK` | 来源验证通过的中间态（可合并进 RECEIVED→INITIALIZED，保留它是因为验证可能异步/可重试） |
-| 3 | `INITIALIZED` | 实体建成，可被分配、可开始流转 |
+| 3 | `INITIALIZED` | "接管完成"：来源验证通过 + Repository 绑定，可被分配、可开始流转 |
 | 4 | `ANALYZING` | 深度分析中（V1 只定义边界，见 §G.4） |
 | 5 | `PENDING_CONFIRMATION` | 等老板确认，人工门 |
 | 6 | `EXECUTING` / `BLOCKED` | 执行中 / 执行阻塞（单写者约定：同时只有 1 个活跃执行 Agent） |
@@ -238,7 +243,8 @@ REJECTED ← 终态
 
 - **EXECUTING 单写者**（§B.2 决议沿用）：进入 EXECUTING 时记录执行 Agent，
   同一 Project 同时只有 1 个活跃执行 Agent；BLOCKED 释放后才可再进 EXECUTING。
-- **REJECTED 带原因码**（§G.3），不是黑洞：被拒项目保留记录与原因，可人工重建新 Intake。
+- **REJECTED 带原因码**（§G.3），不是黑洞：被拒项目 = Project 实体本身落 REJECTED 终态
+  （记录 + 原因码 + 原因描述持久化在 Project 表，§E.3 R1 出生模型），可人工重建新 Intake。
 - **BLOCKED 必须有 blocker 描述 + 期望解除条件**，否则不许挂起（防"永久阻塞"假状态）。
 
 ---
@@ -300,7 +306,7 @@ created_at / updated_at / status_changed_at
 
 1. **登记来源**：把来源描述（source_type + 定位信息）登记为 Repository 资产记录（§F）。
 2. **验证来源**：确认来源真实存在、可读（§F 的逐类型验证动作）。
-3. **初始化实体**：创建 Project + Repository 记录，状态机从 RECEIVED 走起（§C）。
+3. **创建与完成实体**：受理时创建 Project（status=RECEIVED，"受理进行中"）；来源验证通过后绑定已验证 Repository，完成为 INITIALIZED（"接管完成"）（§C / §E.3 R1 出生模型）。
 4. **移交下一环节**：完成后进入 ANALYZING 或等老板确认，**不产生任何执行**。
 
 一句话：**Intake 是"接项目"，不是"做项目"，不是"看项目"。**
@@ -309,7 +315,7 @@ created_at / updated_at / status_changed_at
 
 | 环节 | 负责什么 | 产出 | V1 状态 |
 |---|---|---|---|
-| **Intake** | 来源验证、实体初始化、状态进入 | Project + Repository 记录（已验证） | §E–§F 设计 |
+| **Intake** | 受理建实体、来源验证、完成接管、状态进入 | Project 实体（受理时即创建）+ Repository 记录（已验证） | §E–§F 设计 |
 | **Project Analysis** | 深度代码/文档分析：技术栈、依赖、启动方式、风险 | Analysis Artifact（独立对象，不塞进 Project 本体） | 只定义边界（§G.4），不实现 |
 | **Project Execution** | 真正的干活 | Task → AgentRun（现有链路） | 现有能力，归 Phase 2B+ |
 
@@ -341,30 +347,49 @@ IntakeCommand = {
 
 输出（`DESIGN PROPOSAL`）：
 
-1. **Project 记录**：id、name、description、goal、status=INITIALIZED、created_at。
-2. **Repository 记录 × N**：每条含 source_type、locator（§F）、验证结果 verified=true。
+1. **Project 记录**：受理时即创建（status=RECEIVED），完成 Intake 后 status=INITIALIZED；
+   含 id、name、description、goal、created_at（§E.3 R1 出生模型）。
+2. **Repository 记录 × N**：每条含 source_type、locator（§F）、验证结果 verified=true
+   （Repository 在登记阶段创建；验证通过后才与完成态 Project 绑定）。
 3. **状态机推进记录**：RECEIVED → … → INITIALIZED 的每一步留痕（审计最小集，§C）。
 4. **移交信号**：Project 进入"待分析 / 待确认"，Intake 动作结束。**不创建任何 Task、不指派任何 Agent、不写任何工作区。**
+5. **失败路径（REJECTED 持久化归属）**：不可修复失败时 Project 实体落在 status=REJECTED 终态，
+   保留记录 + 原因码 + 原因描述（§G.3）。**REJECTED 项目持久化在 Project 表本身**——
+   因为 Project 在受理时即出生（§E.3），被拒项目与成功项目共用同一张表的持久化归属，
+   不存在"REJECTED 记录挂在实体之外的无主记录"。系统不自动重试 REJECTED，可人工重建新 Intake。
 
 ### E.3 Intake 最小流程（逐步）
 
 ```text
-1. 受理        接受 IntakeCommand，字段校验            → RECEIVED
-2. 登记来源    按 source_type 生成 Repository 记录     → 仍在 RECEIVED（实体未确认前不算建成）
+1. 受理        接受 IntakeCommand，入口字段校验通过
+               创建 Project 实体（status=RECEIVED，"受理进行中"）  → RECEIVED
+               （入口校验失败：拒绝受理，不创建任何实体——这不是 REJECTED，§G.3）
+2. 登记来源    按 source_type 登记来源描述为 Repository 记录（待验证）
+               → Project 仍处 RECEIVED（实体已存在，来源验证进行中）
 3. 验证来源    逐条执行 §F.1 的验证动作
                全部通过 ────────────────────────────→ SOURCES_OK
-               任一失败 → 走 §G.3 错误处理（REJECTED 或挂起重试）
-4. 初始化实体  创建 Project（status=INITIALIZED）
+               瞬时失败 → 有界重试（留在 RECEIVED/SOURCES_OK，带重试标记，§G.3）
+               失败不可修复 / 重试超限 → §G.3：Project → REJECTED
+               （终态；记录 + 原因码 + 原因描述持久化在 Project 表本身）
+4. 完成实体    Project status → INITIALIZED（"接管完成"）
                绑定已验证的 Repository 记录集合
 5. 移交        进入 ANALYZING 或 PENDING_CONFIRMATION
                （由老板/配置选择；Intake 自身到此为止）
 ```
 
-关键约定：
+关键约定（**R1 出生模型裁定，t_6dcd8579，`DESIGN PROPOSAL`**）：
 
-- **步骤 4 之前不落 Project 实体**（或仅以 RECEIVED 草稿态存在）。来源未验证的"假项目"不进入公司视野
-  ——这是风险 6（不同来源身份不统一）的防线：Project 的出生时刻 = 来源验证通过时刻，
-  身份从一开始就是"已验证来源 + 业务目标"。
+- **Project 实体的出生时刻 = Intake 受理时刻（步骤 1，RECEIVED）**。
+  "受理进行中"（RECEIVED/SOURCES_OK）与"接管完成"（INITIALIZED）是**同一实体的两个阶段**，
+  不是"先验证、验证通过才创建实体"的旧时序：
+  - RECEIVED/SOURCES_OK 阶段的 Project 不是"已完成接管"的 Project，而是**"正在受理中的项目"**——
+    它只有业务意图与来源登记，来源尚未验证，不得进入 ANALYZING / PENDING_CONFIRMATION / EXECUTING。
+  - **INITIALIZED 才是"接管完成"的门**：只有来源验证通过后实体才跨过这道门，
+    身份从此是"已验证来源 + 业务目标"——风险 6（不同来源身份不统一）的防线不变：
+    防线在门的位置（INITIALIZED 前），不在实体是否存在。
+- **REJECTED 的持久化归属（验收标准 #2）**：因实体在受理时即出生，被拒项目**持久化在 Project 表本身**
+  （status=REJECTED + 原因码 + 原因描述，见 §E.2 输出第 5 条 / §G.3 规则 2）。
+  不存在"REJECTED 记录挂在实体之外的无主记录"；系统不自动重试 REJECTED，人工重建 = 新 IntakeCommand（新 Project）。
 - 步骤 5 的"移交"是一个**动作**，不是一个 Intake 子流程：分析属于 Analysis 环节，确认属于老板，
   Intake 对两者都不负责。
 
@@ -585,7 +610,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | `SOURCE_NOT_FOUND` | 路径不存在 / 仓库 404 且无法修复 | 来源验证 | **permanent** | `REJECTED`（终态） |
 | `SOURCE_INVALID` | 文件损坏 / 结构非法 / 缺必填字段 | 命令校验 + 来源验证 | **permanent** | `REJECTED`（终态） |
 | `SECURITY_REJECTED` | 安全检查不过（如 zip-slip 路径穿越） | 来源验证（§G.5） | **permanent** | `REJECTED`（终态，不复用、不自动重试） |
-| `SOURCE_UNREACHABLE` | 凭据过期 / 网络**临时**不可达 | 来源验证 | **transient（有界重试）** | 重试期内**留在 RECEIVED/SOURCES_OK**（打 `pending-verifier` 标记 + 有界重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；**超限 → 升级为 `REJECTED`（原因码仍记 `SOURCE_UNREACHABLE`）** |
+| `SOURCE_UNREACHABLE` | 凭据过期 / 网络**临时**不可达 | 来源验证 | **transient（有界重试）** | 重试期内**留在 RECEIVED/SOURCES_OK**（打 `pending-verifier` 标记 + 有界重试计数，M-1 对齐：验证挂起永不落 BLOCKED；Project 实体已存在）；**超限 → 升级为 `REJECTED`（原因码仍记 `SOURCE_UNREACHABLE`，持久化在 Project 表）** |
 | `DISTRIBUTION_FAILED` | 物料分发写存储失败 | Materialization 动作（§E.6；物理通道 §E.4） | **transient（独立可重发）** | `BLOCKED`（不拖 Project 状态倒退；已分发部分留痕可重发） |
 
 **关键规则（防止"假重试"与"假终态"）**：
@@ -595,6 +620,13 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
    若 404 但分类器误判为可重试，靠"重试上限"兜底：达到上限后同一个码升级为 `REJECTED`。
    **即：码本身不变，变的是"还在重试窗口内"还是"已超限落终态"这个迁移条件。**
 2. **`REJECTED` 是终态，带原因码 + 原因描述**，可人工重建新 Intake，但系统不自动重试 REJECTED。
+   **持久化归属（R1 出生模型，§E.3）**：REJECTED 是 Project 实体的状态——实体在受理时即出生，
+   被拒项目的记录 + 原因码 + 原因描述**持久化在 Project 表本身**（同一张表，status 区分），
+   不需要独立的"拒绝记录表"。区分两种"拒绝"：
+   ① **命令级拒绝**（入口校验失败：缺 name/goal、未知 source_type）——发生在实体创建**之前**，
+   只留审计日志，不产生 Project 实体、不落 REJECTED；
+   ② **实体级 REJECTED**（来源验证失败 / 安全检查不过 / 老板否决 / 执行中途否决）——
+   Project 实体已存在，status=REJECTED + 原因码。
 3. **单写者冲突**（第二个 Agent 请求进 EXECUTING）：**不属于上面 5 个原因码**——
    它是约定级冲突，处理 = "拒绝该请求并指向当前执行者"，不是来源/分发失败，不落 REJECTED 也不落 BLOCKED。
 4. **可重试的失败不拖 Project 状态倒退**：验证重试留在 **RECEIVED/SOURCES_OK**（挂 `pending-verifier` 标记 + 有界 `SOURCE_UNREACHABLE` 重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；
@@ -649,7 +681,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | 7 | "一个 Project 能不能有多个仓库？" | 能（N≥0），Vue 前端 + FastAPI 后端是同一件事的两个 Repository。 | §B.1 |
 | 8 | "项目分析结果是不是 Project 数据？" | 不是。分析结果是 Artifact/Knowledge 独立对象（§G.4），塞进 Project 是根任务风险 3。 | §G.4 / §D.3 |
 | 9 | "项目运行环境属于 Project 还是 Workspace？" | **属于 Workspace（现有 agent 作用域机制）**。Project 是业务层，不碰物理运行环境。 | §A.4 / §B.2 |
-| 10 | "不同来源（github/zip/local/document）身份怎么统一？" | **来源未验证不落 Project 实体**；Project 出生时刻 = 来源验证通过时刻，身份 = "已验证来源 + 业务目标"（§E.3 关键约定）。 | §E.3 / §G.3 |
+| 10 | "不同来源（github/zip/local/document）身份怎么统一？" | **R1 出生模型（§E.3）**：Project 实体在受理时（RECEIVED）即出生；"来源未验证"对应的是"受理进行中"阶段（RECEIVED/SOURCES_OK），**不得跨入 INITIALIZED 门**——防线在门的位置（INITIALIZED 前），不在实体是否存在；身份 = "已验证来源 + 业务目标"。被拒项目的记录与原因持久化在 Project 表本身（status=REJECTED + 原因码，§E.2 输出 5 / §G.3）。 | §E.3 / §G.3 |
 | 11 | "github/gitlab 现在接不进（无 git 能力）怎么办？会不会误报已接入？" | 枚举先行、能力后补：git 系来源 V1 只登记 locator，验证挂起 → 真实项目挂在 **RECEIVED/SOURCES_OK**（带 source=git/pending-verifier 标记），等待 2B 首批 git 获取能力落地；有界 `SOURCE_UNREACHABLE` 重试超限后按 §G.3 升级为终态 REJECTED 而非误报已接入（"缺 git 能力"是环境能力缺口，不是 5 个封闭原因码之一，也不产生 BLOCKED 迁移）；补 git 能力时**生命周期形状零改动，只加验证器**（§F.3 / §I）。 | §F.3 / §F.4 / §I |
 | 12 | "来源失败该重试还是该拒？" | **封闭原因码集 + 明确的 transient/permanent 属性 + 有界重试上限**（§G.3），码不变、迁移条件决定终态。 | §G.3 |
 
@@ -734,7 +766,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 - **§H 的 12 条歧义已全部由 §A–§G 消解**：#1 git 字段→独立 Repository；#2 工作区→模型 B 分发；
   #3 Agent 加入→Squad 复用 Group 原语（不自动组队）；#4 Task 关联→三段式 Work Item（V1 不动 Task 表）；
   #5 分析结果→Artifact/Knowledge 独立对象（不回写 Project）；#6–#7 关系→1:N≥0；#8 分析数据→非 Project；
-  #9 运行环境→Workspace；#10 来源身份→"验证通过才落实体"；#11 git 缺口→RECEIVED/SOURCES_OK 挂起（pending-verifier）不误报、有界重试超限→REJECTED；#12 失败策略→封闭原因码 + 有界重试。
+  #9 运行环境→Workspace；#10 来源身份→R1 出生模型："受理即出生，INITIALIZED 前验证不过不得跨门"；被拒记录持久化在 Project 表本身；#11 git 缺口→RECEIVED/SOURCES_OK 挂起（pending-verifier）不误报、有界重试超限→REJECTED；#12 失败策略→封闭原因码 + 有界重试。
 - **三个整合开放项（§G.1 任务图 / §G.2 Squad / §G.3 原因码+重试）已定稿**，2B 无需重辩。
 - **9 条 FACT 已对照活体源码复核通过**，并识别并排除了 2 处"形似 Project/形似 git"的陷阱（C-8 / C-10）。
 - **门槛**：满足 §I.1 四条 + 通过一致性审查（t_5b1293ab）后，方可进入 §I.2 的 2B 首批（git 获取 + 三验证器 + Project/Repository 表 + Intake 服务，Task 表零改动）。
