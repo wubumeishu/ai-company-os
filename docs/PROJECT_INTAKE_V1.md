@@ -5,6 +5,7 @@
 上游依赖：docs/PROJECT_DOMAIN_V1.md（t_e023caf7，§4 Project→N Repository、§5 模型 B、单写者约定）
 贡献分工：本文为 **t_1f24e7ca 的贡献**：Intake 定义与边界、生命周期状态、Project V1 最小字段、Source 支持矩阵。
 后续卡片：正式整合与证据复核（t_d222b4f8）、一致性审查（t_5b1293ab）。
+修订：t_6e8e5c52（M-1 对齐）：git 系来源验证挂起点统一为 **RECEIVED/SOURCES_OK + `pending-verifier` 标记**（有界 `SOURCE_UNREACHABLE` 重试，超限升级终态 REJECTED），清除全部旧「验证 → BLOCKED」表述（§6 / §7 / §10 / §13）。
 
 > 证据约定（与 PROJECT_DOMAIN_V1.md 相同）：每条涉及 Clawith 现状的陈述标注 `FACT`（附 文件:行 证据）或 `DESIGN PROPOSAL`（设计决定，尚无代码）。
 
@@ -203,7 +204,7 @@ Repository = {
 | `zip` | 文件路径 / 上传件 | 文件存在 + 可解开 + 顶层非空 + 无路径穿越（zip-slip 检查） | |
 | `local_git` | 本地路径 | 路径是 git 工作树 + HEAD 可读 | |
 
-- 验证失败分类：**可修复**（凭据过期 → BLOCKED/挂起重试）vs **不可修复**（路径不存在 → REJECTED，原因码）。
+- 验证失败分类：**可修复（transient，凭据过期 / 网络临时不可达 → 留在 RECEIVED/SOURCES_OK 挂起，打 `pending-verifier` 标记，有界 `SOURCE_UNREACHABLE` 重试）** vs **不可修复（permanent，路径不存在 → REJECTED + 原因码）**（§10 明细；M-1 对齐：验证失败永不落 BLOCKED，BLOCKED 仅执行态）。
 - FACT 约束：当前代码里**不存在**任何 git clone/仓库接入能力（全仓检索 `clone_url|git_repo|repository_url`
   无命中；sandbox 里的 `subprocess_backend.py:808 _clone_workspace_to_staging` 是工作区目录 staging 复制，
   与 git 无关）。所以 §7 的 V1 支持矩阵直接由这条 FACT 决定。
@@ -218,7 +219,7 @@ DESIGN PROPOSAL，受 §6 的 FACT 约束：
 | `local_folder` | ✅ 必须支持 | 验证 = 目录存在可读，无需新能力；宿主文件夹是真实接管场景 |
 | `document` | ✅ 必须支持 | 文件可读性检查，无新能力 |
 | `zip` | ✅ 必须支持 | 同上（加 zip-slip 安全检查，§11） |
-| `github` / `gitlab` | ⏳ 未来（Phase 2B 首批） | **验证需要"仓库可达 + 凭据"，这要求 git 获取能力——当前系统没有**（§6 FACT）。V1 枚举保留、流程放行，但真实项目会停在 BLOCKED（缺 git 获取资源），不会误报"已接入" |
+| `github` / `gitlab` | ⏳ 未来（Phase 2B 首批） | **验证需要"仓库可达 + 凭据"，这要求 git 获取能力——当前系统没有**（§6 FACT）。V1 枚举保留、流程放行：git 系来源验证不可完成 → **留在 RECEIVED/SOURCES_OK 挂起（打 `pending-verifier` 标记），有界 `SOURCE_UNREACHABLE` 重试，超限升级终态 REJECTED**；"缺 git 能力"是**环境能力缺口**，不是 5 个封闭原因码之一，**不产生 BLOCKED 迁移**（§10 明细；M-1 对齐），不会误报"已接入" |
 | `local_git` | ⏳ 未来（Phase 2B 同批） | 需要 git 工作树检测 + 快照逻辑 |
 
 约定：
@@ -268,7 +269,7 @@ DESIGN PROPOSAL。原则（AGENTS.md"misconfiguration fails at the earliest auth
 |---|---|---|
 | 命令校验 | 缺 name/goal；未知 source_type；locator 缺字段 | 拒绝受理，不建实体（RECEIVED 内失败，不落库） |
 | 来源验证 | 路径不存在 / 文件损坏 / 仓库不可达（且无法修复） | `REJECTED` + 原因码（`SOURCE_NOT_FOUND` / `SOURCE_INVALID`） |
-| 来源验证 | 凭据过期 / 网络临时不可达 | 挂起可重试（留在 SOURCES_OK 前，状态 RECEIVED + 重试标记；超限 → REJECTED `SOURCE_UNREACHABLE`） |
+| 来源验证 | 凭据过期 / 网络临时不可达 | 挂起可重试（**留在 RECEIVED/SOURCES_OK**，打 `pending-verifier` 标记，有界重试；超限 → REJECTED `SOURCE_UNREACHABLE`。M-1 对齐：验证挂起永不落 BLOCKED） |
 | 物料分发 | 写存储失败 | 分发是独立动作：失败 → BLOCKED（`DISTRIBUTION_FAILED`），不拖 Project 状态倒退；已分发部分留痕可重发 |
 | 单写者冲突 | 第二个 Agent 请求进 EXECUTING | 拒绝并指向现有执行者（约定级冲突，非数据损坏） |
 
@@ -306,7 +307,7 @@ DESIGN PROPOSAL + FACT 落点：
 ```text
 IntakeCommand{name=企业官网, goal=修复登录问题, source=[github:example/company-site, default_branch=main]}
   → RECEIVED → 登记 Repository(github, locator) → 验证：
-      V1 现状：git 获取能力未落地 → 验证挂起（BLOCKED, 缺 git 获取资源）
+      V1 现状：git 获取能力未落地 → 验证挂起（**留在 RECEIVED/SOURCES_OK，打 `pending-verifier` 标记，有界 `SOURCE_UNREACHABLE` 重试；超限 → 终态 REJECTED**）
       Phase 2B 后：HEAD 可达 + 凭据 OK → SOURCES_OK → INITIALIZED
   → PENDING_CONFIRMATION（老板确认范围）→ EXECUTING（单写者 Agent）
   → （Analysis 在确认前或后按 §9 边界运行，产出 Artifact，不回写 Project）

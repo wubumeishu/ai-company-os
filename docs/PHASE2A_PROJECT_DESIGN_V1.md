@@ -13,6 +13,10 @@
 
 > 证据约定（与两份源文档一致）：凡涉及 Clawith 现状的陈述标注 `FACT`（附 文件:行 证据，且本卡已对照活体源码复核）
 > 或 `DESIGN PROPOSAL`（本文/源文档的设计决定，尚无代码）。
+>
+> 修订：t_6e8e5c52（M-1 对齐）：清除 §G.3 原因码表 `SOURCE_UNREACHABLE` 行残留的「验证重试留在 RECEIVED/BLOCKED」旧表述，
+> 与 §F.3 / §F.4 / §G.3 规则 4 / §H #11 统一为「验证挂起留在 RECEIVED/SOURCES_OK + `pending-verifier` 标记 + 有界重试，超限升级终态 REJECTED」；
+> BLOCKED 仅保留执行态入边（EXECUTING → BLOCKED）与 `DISTRIBUTION_FAILED` 分发落点（§G.3，独立设计，非验证失败）。
 
 本文是 **Phase 2B 实现的门槛（gate）**：只有 §H 列出的所有歧义都已被 §A–§G 的设计消解、且 §G 的三个开放项已裁定，
 才允许进入 Phase 2B 的实现卡。
@@ -517,7 +521,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 | `SOURCE_NOT_FOUND` | 路径不存在 / 仓库 404 且无法修复 | 来源验证 | **permanent** | `REJECTED`（终态） |
 | `SOURCE_INVALID` | 文件损坏 / 结构非法 / 缺必填字段 | 命令校验 + 来源验证 | **permanent** | `REJECTED`（终态） |
 | `SECURITY_REJECTED` | 安全检查不过（如 zip-slip 路径穿越） | 来源验证（§G.5） | **permanent** | `REJECTED`（终态，不复用、不自动重试） |
-| `SOURCE_UNREACHABLE` | 凭据过期 / 网络**临时**不可达 | 来源验证 | **transient（有界重试）** | 重试期内留在 RECEIVED/BLOCKED + 重试标记；**超限 → 升级为 `REJECTED`（原因码仍记 `SOURCE_UNREACHABLE`）** |
+| `SOURCE_UNREACHABLE` | 凭据过期 / 网络**临时**不可达 | 来源验证 | **transient（有界重试）** | 重试期内**留在 RECEIVED/SOURCES_OK**（打 `pending-verifier` 标记 + 有界重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；**超限 → 升级为 `REJECTED`（原因码仍记 `SOURCE_UNREACHABLE`）** |
 | `DISTRIBUTION_FAILED` | 物料分发写存储失败 | 分发动作（§E.4） | **transient（独立可重发）** | `BLOCKED`（不拖 Project 状态倒退；已分发部分留痕可重发） |
 
 **关键规则（防止"假重试"与"假终态"）**：
@@ -529,7 +533,7 @@ A2A 已存在且真实执行（`a2a_runtime.py:774`，Phase 1 审计 §6）。
 2. **`REJECTED` 是终态，带原因码 + 原因描述**，可人工重建新 Intake，但系统不自动重试 REJECTED。
 3. **单写者冲突**（第二个 Agent 请求进 EXECUTING）：**不属于上面 5 个原因码**——
    它是约定级冲突，处理 = "拒绝该请求并指向当前执行者"，不是来源/分发失败，不落 REJECTED 也不落 BLOCKED。
-4. **可重试的失败不拖 Project 状态倒退**：验证重试留在 RECEIVED/SOURCES_OK 之前；
+4. **可重试的失败不拖 Project 状态倒退**：验证重试留在 **RECEIVED/SOURCES_OK**（挂 `pending-verifier` 标记 + 有界 `SOURCE_UNREACHABLE` 重试计数，M-1 对齐：验证挂起永不落 BLOCKED）；
    分发失败落 BLOCKED（独立动作，§E.4）。
 5. **closed-set 扩展**：新增原因码必须走整合卡 + 一致性审查（t_5b1293ab），不允许实现侧私自加码。
 
