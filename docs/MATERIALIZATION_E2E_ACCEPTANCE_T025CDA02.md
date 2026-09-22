@@ -167,3 +167,18 @@ PASS.
 - The 3 pre-existing Windows-platform test failures (§5) need a
   dedicated fix card (platform-conditional assertions / barrier
   semantics), not materialization.
+
+## 8. Scope check (§22.P — deliberately NOT implemented in this card)
+
+- No Git acquisition (`github`/`gitlab`/`local_git` remain
+  `SOURCE_NOT_READY`/`SOURCE_NOT_SUPPORTED`); no Project Analysis, Task
+  generation, Squad, agent auto-start, or Agent Run creation (card §14
+  hard rule — the endpoint writes files + provenance rows and returns;
+  it never starts anything).
+- No new `Materialization` table / migration and no Artifact/Evidence
+  system — provenance rides the existing `WorkspaceFileRevision` rows
+  (M6/M1/M5/M8 adjudications) + the existing `AuditLog`; `record_revision`
+  signature unchanged.
+- Workspace Lock used strictly as a runtime write-conflict guard; it is
+  NOT declared a "Project Single Writer" (card §7). No scheduler.
+
