@@ -186,3 +186,61 @@ class ProjectOut(BaseModel):
             updated_at=project.updated_at,
             status_changed_at=project.status_changed_at,
         )
+
+
+# ─── Materialization (Phase 2B-3, card t_025cda02) ────────────────────────
+# Per docs/MATERIALIZATION_SECURE_SPEC_V1.md §10.1: the request body and the
+# closed-set result models.  outcome / reason_code are closed sets defined by
+# the spec; the service emits only these, and the transport layer (api/
+# projects.py) maps the outcome to a status code (201 on SUCCESS, 409 on
+# PARTIAL / FAILED).  No new table, no migration (spec §0).
+
+
+class MaterializeRequest(BaseModel):
+    """Materialization request body (spec §10.1): a single flag.
+
+    ``overwrite`` controls the idempotency rule (spec §8 / M5): when the
+    target key already exists with *different* content, ``overwrite=False``
+    (default) is a fail-fast CONTENT_CONFLICT (0 new writes);
+    ``overwrite=True`` explicitly replaces it and records a revision with the
+    captured ``before`` content.
+    """
+
+    overwrite: bool = False
+
+
+class MaterializationRepoResult(BaseModel):
+    """One repository's materialization outcome (spec §10.1 closed sets)."""
+
+    repo_id: uuid.UUID
+    source_type: str
+    # Closed outcome set: "SUCCESS" | "CONVERGED" | "SKIPPED_NO_MATERIAL" | "FAILED"
+    outcome: str
+    # Closed reason-code set: None | CONTENT_CONFLICT | LOCK_CONFLICT |
+    #   HUMAN_LOCK_CONFLICT | SOURCE_NOT_READY | SOURCE_FAILED |
+    #   SOURCE_SIZE_LIMIT | SOURCE_INVALID | SECURITY_REJECTED |
+    #   SKIPPED_NO_MATERIAL  (populated on FAILED / SKIPPED rows)
+    reason_code: str | None = None
+    written: int = 0
+    converged: int = 0
+    skipped: int = 0
+
+
+class MaterializationOut(BaseModel):
+    """The whole-call materialization result (spec §10.1).
+
+    ``outcome`` is the independent-outcome rollup (spec §7.3): SUCCESS when
+    every repo is in a success class, PARTIAL when some succeeded and some
+    failed, FAILED when none did.  ``retryable`` mirrors whether a retry of
+    the call can change the outcome (lock / transient conflicts -> True).
+    ``limitations`` carries the spec §9.3 declared LIMITATIONS that actually
+    apply to this call (never pretends a unified evidence table).
+    """
+
+    project_id: uuid.UUID
+    agent_id: uuid.UUID
+    # Closed outcome set: "SUCCESS" | "PARTIAL" | "FAILED"
+    outcome: str
+    retryable: bool = False
+    repositories: list[MaterializationRepoResult] = []
+    limitations: list[str] = []
