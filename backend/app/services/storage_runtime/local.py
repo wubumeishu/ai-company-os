@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-import fcntl
 import os
 from pathlib import Path
 import shutil
@@ -13,6 +12,15 @@ import uuid
 
 import aiofiles
 from fastapi import HTTPException, status
+
+# NOTE: fcntl is Unix-only and is imported lazily inside _mutation_lock so
+# this module (and the facade re-exports) stay importable on hosts without
+# it. The lock is a no-op there; cross-process serialization is only
+# meaningful on the Unix deployments that use the local backend.
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - platform-specific (Windows dev host)
+    fcntl = None
 
 from app.services.storage_runtime.base import (
     ConditionalWriteResult,
@@ -189,6 +197,11 @@ class LocalStorageBackend(StorageBackend):
     async def _mutation_lock(self):
         """Serialize mutations across every process sharing this local root."""
         self.root.mkdir(parents=True, exist_ok=True)
+        if fcntl is None:
+            # No platform file lock available: skip cross-process
+            # serialization (single-process correctness still holds).
+            yield
+            return
         root = self.root.resolve()
         open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         lock_fd = os.open(root, open_flags)
