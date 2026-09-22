@@ -99,12 +99,27 @@ class ProjectDAO(TenantScopedBaseDAO[Project]):
         is the caller's request session the flush rides that transaction
         (committed by the request exit path); when it is None the DAO opens
         its own session and auto-commits (background/worker callers).
+
+        The returned project's ``repositories`` relationship and every
+        server-side column are re-fetched in the session's async context, so
+        API views that serialize it never trigger a lazy load or an expired
+        attribute refresh (an AsyncSession would raise ``MissingGreenlet``).
         """
         async with self.session(db=db) as session_db:
             self.add_scoped(session_db, project, tenant_id=tenant_id)
             for repo in repositories:
                 self._add_repository_scoped(session_db, repo, tenant_id=tenant_id)
             await session_db.flush()
+            # The INSERT flush expires every server-generated column
+            # (created_at / updated_at) on the in-memory objects.  Re-load
+            # them so the API view carries concrete values; a plain read of
+            # an expired attribute on an AsyncSession would otherwise raise
+            # MissingGreenlet on the request greenlet.
+            await session_db.refresh(project)
+            # Then load the one-to-many relationship in the session's async
+            # context (same eager shape get_scoped_with_repositories returns);
+            # the API view must never lazy-load it.
+            await session_db.refresh(project, attribute_names=["repositories"])
         return project
 
     def _add_repository_scoped(self, db, repo: Repository, *, tenant_id: uuid.UUID) -> None:
@@ -125,6 +140,11 @@ class ProjectDAO(TenantScopedBaseDAO[Project]):
             project.status_changed_at = datetime.now(UTC)
             session_db.add(project)
             await session_db.flush()
+            # ``updated_at`` is a server-side onupdate: the flush above expires
+            # it on the in-memory object, and a later plain read (e.g. the
+            # API view) would then refresh outside the greenlet (MissingGreenlet
+            # on an AsyncSession).  Re-load it here, inside the session.
+            await session_db.refresh(project, attribute_names=["updated_at"])
 
     async def reject(
         self,
@@ -146,6 +166,9 @@ class ProjectDAO(TenantScopedBaseDAO[Project]):
             project.rejection_detail = detail
             session_db.add(project)
             await session_db.flush()
+            # Re-load the server-side onupdate timestamp inside the session
+            # (see transition): avoids a lazy refresh on the request greenlet.
+            await session_db.refresh(project, attribute_names=["updated_at"])
 
     async def mark_sources_ok(self, project: Project, *, db=None) -> None:
         """Persist the RECEIVED/SOURCES_OK -> SOURCES_OK transition."""
@@ -154,6 +177,9 @@ class ProjectDAO(TenantScopedBaseDAO[Project]):
             project.status_changed_at = datetime.now(UTC)
             session_db.add(project)
             await session_db.flush()
+            # Re-load the server-side onupdate timestamp inside the session
+            # (see transition): avoids a lazy refresh on the request greenlet.
+            await session_db.refresh(project, attribute_names=["updated_at"])
 
 
 class RepositoryDAO(TenantScopedBaseDAO[Repository]):
@@ -178,6 +204,10 @@ class RepositoryDAO(TenantScopedBaseDAO[Repository]):
             repo.verified_at = datetime.now(UTC)
             session_db.add(repo)
             await session_db.flush()
+            # The flush expires every repo attribute (incl. the server-side
+            # updated_at); reload inside the session so the API view that
+            # serializes this row never triggers a lazy refresh.
+            await session_db.refresh(repo)
 
     async def mark_pending_verifier(self, repo: Repository, *, db=None) -> None:
         """Set the pending-verifier mark on a repository (git-source hold, §4.4)."""
@@ -185,6 +215,9 @@ class RepositoryDAO(TenantScopedBaseDAO[Repository]):
             repo.pending_verifier = True
             session_db.add(repo)
             await session_db.flush()
+            # Reload the row's attributes (incl. the server-side updated_at)
+            # so the API view can serialize it without a lazy refresh.
+            await session_db.refresh(repo)
 
     async def clear_pending_verifier(self, repo: Repository, *, db=None) -> None:
         """Clear the pending-verifier mark once a source is fully verified."""
@@ -192,6 +225,9 @@ class RepositoryDAO(TenantScopedBaseDAO[Repository]):
             repo.pending_verifier = False
             session_db.add(repo)
             await session_db.flush()
+            # Reload the row's attributes (incl. the server-side updated_at)
+            # so the API view can serialize it without a lazy refresh.
+            await session_db.refresh(repo)
 
     async def bump_retry_count(self, repo: Repository, *, db=None) -> int:
         """Increment the bounded retry counter and return the new value."""
@@ -199,6 +235,9 @@ class RepositoryDAO(TenantScopedBaseDAO[Repository]):
             repo.retry_count = int(repo.retry_count or 0) + 1
             session_db.add(repo)
             await session_db.flush()
+            # Reload the row's attributes (incl. the server-side updated_at)
+            # so the API view can serialize it without a lazy refresh.
+            await session_db.refresh(repo)
         return int(repo.retry_count or 0)
 
 

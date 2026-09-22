@@ -103,11 +103,13 @@ REASON_SOURCE_NOT_SUPPORTED = "SOURCE_NOT_SUPPORTED"
 #: classification — and the project goes straight to REJECTED with that
 #: reason code. The source_type value is preserved so the "enum first,
 #: capability later" record needs no rework.
-GIT_SOURCE_TYPES = frozenset({
-    "github",
-    "gitlab",
-    "local_git",
-})
+GIT_SOURCE_TYPES = frozenset(
+    {
+        "github",
+        "gitlab",
+        "local_git",
+    }
+)
 
 #: Hardcoded bounded-retry budget for transient failures (brief §8 UNKNOW 4:
 #: hardcode 3; config-ization is explicitly deferred to a future card).
@@ -215,7 +217,13 @@ class ProjectIntakeService:
         tenant_id = self._resolve_tenant(current_user)
         now = datetime.now(UTC)
 
+        # Generate the PK client-side BEFORE the child Repository rows are
+        # constructed: the id default (uuid.uuid4) applies at INSERT, but the
+        # children's NOT NULL ``project_id`` must be concrete in the same
+        # flush.  Pre-assigning mirrors the model default and is a no-op for
+        # servers that would generate it anyway.
         project = Project(
+            id=uuid.uuid4(),
             name=name,
             description=description,
             goal=goal,
@@ -237,16 +245,24 @@ class ProjectIntakeService:
                 )
             )
 
-        # One atomic write of the project + all its source rows in tenant scope.
-        created = await project_dao.add_project_with_repositories(
-            project, repositories, tenant_id=tenant_id, db=db
+        # One atomic write of the project + all its source rows in tenant
+        # scope.  The PK is pre-assigned in the constructor (client-side
+        # ``uuid.uuid4``) so that every child Repository row can carry a
+        # concrete ``project_id`` in the same single flush — a deferred
+        # INSERT-time id default would leave the children's NOT NULL
+        # ``project_id`` unset.
+        created = await project_dao.add_project_with_repositories(project, repositories, tenant_id=tenant_id, db=db)
+        await self._audit(
+            db,
+            "project.intake.received",
+            current_user,
+            {
+                "project_id": str(created.id),
+                "from_status": None,
+                "to_status": _STATUS_RECEIVED,
+                "source_count": len(repositories),
+            },
         )
-        await self._audit(db, "project.intake.received", current_user, {
-            "project_id": str(created.id),
-            "from_status": None,
-            "to_status": _STATUS_RECEIVED,
-            "source_count": len(repositories),
-        })
         return created
 
     async def validate_sources(
@@ -268,8 +284,7 @@ class ProjectIntakeService:
         """
         if project.status in _INCOME_TERMINAL_STATES:
             raise IntakeTransitionError(
-                f"project {project.id} is in terminal state {project.status}; "
-                "Intake validation is not applicable"
+                f"project {project.id} is in terminal state {project.status}; Intake validation is not applicable"
             )
 
         pre_status = project.status
@@ -332,16 +347,19 @@ class ProjectIntakeService:
                 retries_remaining=decision.retries_remaining,
             )
 
-        await self._audit(db, "project.intake.validated", current_user, {
-            "project_id": str(project.id),
-            "from_status": pre_status,
-            "to_status": project.status,
-            "reason_code": decision.rejected_reason_code,
-            "failed_source_id": (
-                str(decision.rejected_source_id) if decision.rejected_source_id else None
-            ),
-            "retryable": decision.retryable,
-        })
+        await self._audit(
+            db,
+            "project.intake.validated",
+            current_user,
+            {
+                "project_id": str(project.id),
+                "from_status": pre_status,
+                "to_status": project.status,
+                "reason_code": decision.rejected_reason_code,
+                "failed_source_id": (str(decision.rejected_source_id) if decision.rejected_source_id else None),
+                "retryable": decision.retryable,
+            },
+        )
         return project, rejection_info
 
     # ------------------------------------------------------------------
@@ -374,15 +392,11 @@ class ProjectIntakeService:
                 )
 
         # 2) Transient / unreachable sources: bounded retry, then escalate.
-        transient = [
-            (repo, oc) for repo, oc in results if not oc.ok and oc.retryable
-        ]
+        transient = [(repo, oc) for repo, oc in results if not oc.ok and oc.retryable]
         if transient:
             # The binding retry counter is the highest one the project has
             # already climbed; the persistence step bumps it afterwards.
-            max_retries_used = max(
-                int(getattr(repo, "retry_count", 0) or 0) for repo, _ in transient
-            )
+            max_retries_used = max(int(getattr(repo, "retry_count", 0) or 0) for repo, _ in transient)
             lead_repo, lead_oc = transient[0]
             if max_retries_used + 1 >= MAX_RETRIES:
                 # Budget exhausted: escalate to REJECTED, reason unchanged
@@ -511,31 +525,40 @@ class ProjectIntakeService:
         path = locator["path"]
         if not os.path.exists(path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_NOT_FOUND,
-                reason_detail=f"path {path!r} does not exist", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_NOT_FOUND,
+                reason_detail=f"path {path!r} does not exist",
+                retryable=False,
             )
         if not os.path.isdir(path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"path {path!r} is not a directory", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"path {path!r} is not a directory",
+                retryable=False,
             )
         if not os.access(path, os.R_OK | os.X_OK):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"directory {path!r} is not readable", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"directory {path!r} is not readable",
+                retryable=False,
             )
         try:
             non_empty = any(os.scandir(path))
         except OSError as exc:
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
                 reason_detail=f"directory {path!r} could not be listed ({exc})",
                 retryable=False,
             )
         if not non_empty:
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"directory {path!r} is empty", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"directory {path!r} is empty",
+                retryable=False,
             )
         return ValidationOutcome(ok=True)
 
@@ -549,25 +572,31 @@ class ProjectIntakeService:
         host_path = locator["path"]
         if not os.path.exists(host_path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_NOT_FOUND,
-                reason_detail=f"document {host_path!r} does not exist", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_NOT_FOUND,
+                reason_detail=f"document {host_path!r} does not exist",
+                retryable=False,
             )
         if not os.path.isfile(host_path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"document {host_path!r} is not a file", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"document {host_path!r} is not a file",
+                retryable=False,
             )
         if not os.access(host_path, os.R_OK):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"document {host_path!r} is not readable", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"document {host_path!r} is not readable",
+                retryable=False,
             )
         if not _is_supported_document(host_path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
                 reason_detail=(
-                    f"document type not supported for {host_path!r} "
-                    f"(allowed: {sorted(_DOCUMENT_EXTENSIONS)})"
+                    f"document type not supported for {host_path!r} (allowed: {sorted(_DOCUMENT_EXTENSIONS)})"
                 ),
                 retryable=False,
             )
@@ -579,14 +608,18 @@ class ProjectIntakeService:
             backend = get_storage_backend()
             if not await backend.exists(key):
                 return ValidationOutcome(
-                    ok=False, reason_code=REASON_SOURCE_NOT_FOUND,
-                    reason_detail=f"storage key {key!r} not found", retryable=False,
+                    ok=False,
+                    reason_code=REASON_SOURCE_NOT_FOUND,
+                    reason_detail=f"storage key {key!r} not found",
+                    retryable=False,
                 )
             entry = await backend.stat(key)
             if entry.is_dir:
                 return ValidationOutcome(
-                    ok=False, reason_code=REASON_SOURCE_INVALID,
-                    reason_detail=f"storage key {key!r} is a directory", retryable=False,
+                    ok=False,
+                    reason_code=REASON_SOURCE_INVALID,
+                    reason_detail=f"storage key {key!r} is a directory",
+                    retryable=False,
                 )
         except SecurityError:
             # A security exception raised by a storage layer is still a
@@ -594,17 +627,16 @@ class ProjectIntakeService:
             raise
         except Exception as exc:  # storage outage → transient hold (brief §4.5)
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_UNREACHABLE,
+                ok=False,
+                reason_code=REASON_SOURCE_UNREACHABLE,
                 reason_detail=f"document storage backend unreachable ({exc.__class__.__name__})",
                 retryable=intake_security.reason_code_is_retryable(REASON_SOURCE_UNREACHABLE),
             )
         if not _is_supported_document(key):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=(
-                    f"document type not supported for {key!r} "
-                    f"(allowed: {sorted(_DOCUMENT_EXTENSIONS)})"
-                ),
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=(f"document type not supported for {key!r} (allowed: {sorted(_DOCUMENT_EXTENSIONS)})"),
                 retryable=False,
             )
         return ValidationOutcome(ok=True)
@@ -619,20 +651,25 @@ class ProjectIntakeService:
         host_path = locator["path"]
         if not os.path.exists(host_path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_NOT_FOUND,
-                reason_detail=f"zip {host_path!r} does not exist", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_NOT_FOUND,
+                reason_detail=f"zip {host_path!r} does not exist",
+                retryable=False,
             )
         if not os.path.isfile(host_path):
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_INVALID,
-                reason_detail=f"zip {host_path!r} is not a file", retryable=False,
+                ok=False,
+                reason_code=REASON_SOURCE_INVALID,
+                reason_detail=f"zip {host_path!r} is not a file",
+                retryable=False,
             )
         try:
             async with aiofiles.open(host_path, "rb") as fh:
                 data = await fh.read()
         except OSError as exc:
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_UNREACHABLE,
+                ok=False,
+                reason_code=REASON_SOURCE_UNREACHABLE,
                 reason_detail=f"zip {host_path!r} could not be read ({exc})",
                 retryable=intake_security.reason_code_is_retryable(REASON_SOURCE_UNREACHABLE),
             )
@@ -644,13 +681,16 @@ class ProjectIntakeService:
             backend = get_storage_backend()
             if not await backend.exists(key):
                 return ValidationOutcome(
-                    ok=False, reason_code=REASON_SOURCE_NOT_FOUND,
-                    reason_detail=f"storage key {key!r} not found", retryable=False,
+                    ok=False,
+                    reason_code=REASON_SOURCE_NOT_FOUND,
+                    reason_detail=f"storage key {key!r} not found",
+                    retryable=False,
                 )
             entry = await backend.stat(key)
             if entry.is_dir:
                 return ValidationOutcome(
-                    ok=False, reason_code=REASON_SOURCE_INVALID,
+                    ok=False,
+                    reason_code=REASON_SOURCE_INVALID,
                     reason_detail=f"storage key {key!r} is a directory, not a file",
                     retryable=False,
                 )
@@ -659,7 +699,8 @@ class ProjectIntakeService:
             raise
         except Exception as exc:  # storage outage → transient hold (brief §4.5)
             return ValidationOutcome(
-                ok=False, reason_code=REASON_SOURCE_UNREACHABLE,
+                ok=False,
+                reason_code=REASON_SOURCE_UNREACHABLE,
                 reason_detail=f"zip storage backend unreachable ({exc.__class__.__name__})",
                 retryable=intake_security.reason_code_is_retryable(REASON_SOURCE_UNREACHABLE),
             )
@@ -686,8 +727,7 @@ class ProjectIntakeService:
         # SOURCE_NOT_SUPPORTED, permanent — the project is rejected, never
         # "validated successfully".
         return self._not_supported_outcome(
-            f"{repo.source_type} source: no V1 verifier "
-            "(Phase 2B git acquisition pending)"
+            f"{repo.source_type} source: no V1 verifier (Phase 2B git acquisition pending)"
         )
 
     # ------------------------------------------------------------------
