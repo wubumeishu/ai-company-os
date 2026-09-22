@@ -246,7 +246,11 @@ def _atomic_write_bytes(path: Path, data: bytes, temp_prefix: str) -> None:
         existing_mode = stat_module.S_IMODE(path.stat().st_mode)
     fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
-        if existing_mode is not None:
+        # Preserve the pre-existing file's mode.  os.fchmod is Unix-only
+        # (same platform-specific situation as the fcntl note above): on
+        # the Windows dev host there are no POSIX mode bits to preserve,
+        # so the call is skipped rather than crashing.
+        if existing_mode is not None and hasattr(os, "fchmod"):
             os.fchmod(fd, existing_mode)
         with os.fdopen(fd, "wb", closefd=True) as temp_file:
             fd = -1

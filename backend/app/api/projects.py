@@ -29,19 +29,32 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.project_intake_dao import project_dao
 from app.database import get_db
 from app.models.project import Project
 from app.models.user import User
-from app.schemas.project_intake import ProjectIntakeCreate, ProjectOut, RejectionInfo
+from app.schemas.project_intake import (
+    MaterializationOut,
+    MaterializeRequest,
+    ProjectIntakeCreate,
+    ProjectOut,
+    RejectionInfo,
+)
 from app.services.intake_security import (
     ReadForbidden,
     SecurityError,
+    TenantScopeViolation,
     verify_read_access,
     verify_tenant_scope,
 )
 from app.services.project_intake_service import project_intake_service
+from app.services.project_materialization_service import (
+    MaterializationNotReady,
+    MaterializationSecurity,
+    project_materialization_service,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -194,3 +207,76 @@ async def validate_intake(
         # Permanent rejection → terminal REJECTED, reported as a 409 conflict.
         response.status_code = status.HTTP_409_CONFLICT
     return _project_out(project, rejection_info)
+
+
+@router.post("/{project_id}/materialize/{agent_id}", response_model=MaterializationOut, status_code=status.HTTP_201_CREATED)
+async def materialize_project(
+    project_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    data: MaterializeRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Materialize a verified Project's source material into a target agent.
+
+    Per docs/MATERIALIZATION_SECURE_SPEC_V1.md §10 the handler is a pure
+    transport adapter: it loads the authorized project, authorizes the target
+    agent (``check_agent_access``), hands explicit inputs to the owning
+    service, and maps the outcome to the transport response (spec §10.2).
+
+    Status mapping:
+      - 201 on SUCCESS — the material is in the agent's storage subtree.
+      - 409 on PARTIAL / FAILED, carrying the FULL ``MaterializationOut``
+        body (per-repo detail) — never a 2xx that would misread partial work
+        as success (spec §7.3 / §10.2).
+      - 409 SOURCE_NOT_READY when the project is not INITIALIZED (pre-I/O
+        gate; retryable=False).
+      - 403 when the caller may not read the project or has no access to the
+        target agent (read gate / agent gate, spec §5.1 gate 3).
+    """
+    project = await _load_authorized_project(db, project_id, current_user)
+    agent, _access_level = await check_agent_access(db, current_user, agent_id)  # 404/403 propagate
+    try:
+        result = await project_materialization_service.materialize(
+            db,
+            project=project,
+            agent=agent,
+            overwrite=data.overwrite,
+            current_user=current_user,
+        )
+    except MaterializationNotReady as exc:
+        # Pre-I/O gate (spec §1 / §10.2): the project is not INITIALIZED, or a
+        # repository is not verified-ready / is a git source.  One narrow 409
+        # with the intake-style detail body; nothing was written.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": exc.message, "retryable": exc.retryable},
+        ) from None
+    except (MaterializationSecurity, TenantScopeViolation):
+        # A tenant-isolation security finding: the M9 fourth gate (a Tenant-A
+        # project -> Tenant-B agent, the combination gap ``check_agent_access``
+        # alone leaves open for background callers) or the entry tenant
+        # re-check.  403 (spec §5.1 gate 3 / §10.2 读门禁/租户).  No write.
+        # Through the API the transport's prior gates already make these
+        # unreachable; catching them keeps the mapping correct if a background
+        # caller or a future reorder ever reaches them.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No access: this materialization crosses a tenant security boundary",
+        ) from None
+    except SecurityError:
+        # Residual storage-layer security finding re-raised by the source
+        # readers (spec §3.3 / §10.2: a storage SecurityError maps to 409 and
+        # must NOT be downgraded to "unreachable").  Intake-style 409 body.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "SECURITY_REJECTED", "message": "storage security finding", "retryable": False},
+        ) from None
+    if result.outcome in ("PARTIAL", "FAILED"):
+        # PARTIAL / FAILED is a 409 carrying the FULL per-repo body (spec
+        # §7.3 / §10.2) — never a 2xx.  Set the status on the shared Response
+        # (the validate_intake pattern) so the same MaterializationOut body
+        # serves the 409 while the successful repos' detail is preserved.
+        response.status_code = status.HTTP_409_CONFLICT
+    return result
