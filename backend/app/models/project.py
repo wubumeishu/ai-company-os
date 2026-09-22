@@ -78,6 +78,16 @@ class Project(Base):
     )
     status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Intake rejection persistence (Phase 2B-2, design §E.2 + §G.3 rule 2②):
+    # set together on the RECEIVED/SOURCES_OK -> REJECTED transition only.
+    # rejection_reason holds the closed reason-code set defined by the
+    # ProjectIntakeService (SOURCE_NOT_FOUND / SOURCE_INVALID /
+    # SECURITY_REJECTED / SOURCE_UNREACHABLE / DISTRIBUTION_FAILED /
+    # SOURCE_NOT_SUPPORTED); it is a VARCHAR by design — the closed set is a
+    # service-layer contract, not a DB enum. Both stay None unless REJECTED.
+    rejection_reason: Mapped[str | None] = mapped_column(String(50))
+    rejection_detail: Mapped[str | None] = mapped_column(Text)
+
     # Relationships
     creator: Mapped["User"] = relationship("User", foreign_keys=[created_by])
     repositories: Mapped[list["Repository"]] = relationship(
@@ -126,6 +136,19 @@ class Repository(Base):
     display_name: Mapped[str | None] = mapped_column(String(200))
     verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Pending-verifier mark + bounded retry counter for sources held in a
+    # transient validate outcome (SOURCE_UNREACHABLE, Phase 2B-2 brief §4.5):
+    # the project stays in RECEIVED/SOURCES_OK while the pending-verifier
+    # mark is set and each validate call increments retry_count; at the
+    # retry limit (3, hardcoded per brief §8 UNKNOW 4) the project
+    # transitions to REJECTED. git sources (github / gitlab / local_git,
+    # design §F.3 + brief §4.4) do NOT use this hold: they are explicitly
+    # rejected on the first validate with the permanent reason code
+    # SOURCE_NOT_SUPPORTED (security module's closed-set classification),
+    # never "validated successfully". Never written for verified V1
+    # source types (manual / local_folder / document / zip).
+    pending_verifier: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    retry_count: Mapped[int] = mapped_column(server_default="0", nullable=False, default=0)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True
     )
