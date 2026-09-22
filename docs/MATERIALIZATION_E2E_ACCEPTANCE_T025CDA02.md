@@ -7,6 +7,12 @@
   adjudicated text the builder and reviewer consume.
 - Merged parents under test: `5830624c` (main, incl. Phase 2B-2 Intake
   lifecycle + f067).
+- Commit / push: main work is `845d7750` on `wt/t_025cda02`; pushed to
+  `origin` and verified server-side via `git ls-remote
+  origin refs/heads/wt/t_025cda02` (the egress block that earlier stopped
+  a first push attempt on this host cleared; the push succeeded). No new
+  table / migration (schema-change requirement: none — provenance uses the
+  existing `workspace_file_revisions` + `audit_logs`).
 
 ## 1. Scope
 
