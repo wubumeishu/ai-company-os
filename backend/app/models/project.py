@@ -18,7 +18,12 @@ Design constraints honored here (and nowhere else in this card):
   tenant filter in app/dao/base.py (``_is_tenant_scoped_model``) without
   any opt-in flag.
 - Task/Agent/Workspace/Execution/Artifact/Review/Scheduler models stay
-  untouched (§G.1: the V1 task graph does not add project fields to Task).
+  untouched (§G.1: the Phase 2A V1 task graph did not add project fields to
+  Task).  Phase 2D (docs/PHASE_2D_TASK_GRAPH_PROVENANCE_DESIGN.md §3/§4)
+  supersedes that Phase 2A boundary: Task now carries a five-column
+  provenance set + the task_dependencies edge table, so a Task's origin
+  (Project / AnalysisRun / Finding / revision / created_reason) is
+  persisted.  See task.py for the model.
 """
 
 import uuid

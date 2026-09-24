@@ -80,6 +80,14 @@ async def create_task(
         supervision_target_name=data.supervision_target_name,
         supervision_channel=data.supervision_channel,
         remind_schedule=data.remind_schedule,
+        # Phase 2D provenance (design §4/§6): ride the Task INSERT.  Omitted
+        # (None) fields leave the analysis columns NULL and created_reason
+        # defaults to MANUAL — the legacy manual path is byte-identical.
+        project_id=data.project_id,
+        analysis_run_id=data.analysis_run_id,
+        finding_id=data.finding_id,
+        revision_sha=data.revision_sha,
+        created_reason=data.created_reason or "MANUAL",
     )
     query_dao.add(db, task)
     await query_dao.flush(db)

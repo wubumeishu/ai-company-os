@@ -42,6 +42,11 @@ async def test_create_todo_registers_runtime_before_committing_business_fact() -
         supervision_target_name=None,
         supervision_channel=None,
         remind_schedule=None,
+        project_id=None,
+        analysis_run_id=None,
+        finding_id=None,
+        revision_sha=None,
+        created_reason=None,
     )
     runtime_handle = SimpleNamespace(run_id=uuid.uuid4())
 

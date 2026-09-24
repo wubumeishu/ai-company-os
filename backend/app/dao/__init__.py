@@ -17,6 +17,7 @@ from app.dao.org_member_dao import org_member_dao
 from app.dao.participant_dao import participant_dao
 from app.dao.query_dao import query_dao
 from app.dao.system_setting_dao import system_setting_dao
+from app.dao.task_dao import task_dependency_dao, task_provenance_dao
 from app.dao.tenant_dao import tenant_dao
 from app.dao.trigger_dao import trigger_dao
 from app.dao.user_dao import user_dao
@@ -40,6 +41,8 @@ __all__ = [
     "participant_dao",
     "query_dao",
     "system_setting_dao",
+    "task_dependency_dao",
+    "task_provenance_dao",
     "tenant_context",
     "tenant_dao",
     "trigger_dao",

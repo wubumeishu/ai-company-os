@@ -354,6 +354,14 @@ class TaskCreate(BaseModel):
     supervision_target_name: str | None = None
     supervision_channel: str | None = None
     remind_schedule: str | None = None
+    # Phase 2D provenance (design §4/§6): where/why this Task came from.
+    # Optional — omit for the legacy manual path (created_reason defaults to
+    # MANUAL with the analysis-side fields NULL).
+    project_id: uuid.UUID | None = None
+    analysis_run_id: uuid.UUID | None = None
+    finding_id: uuid.UUID | None = None
+    revision_sha: str | None = Field(default=None, max_length=64)
+    created_reason: str | None = None  # None -> MANUAL (server default)
 
 
 class TaskOut(BaseModel):
@@ -371,6 +379,12 @@ class TaskOut(BaseModel):
     supervision_target_name: str | None = None
     supervision_channel: str | None = None
     remind_schedule: str | None = None
+    # Phase 2D provenance (design §4) — the traceable origin of the Task.
+    project_id: uuid.UUID | None = None
+    analysis_run_id: uuid.UUID | None = None
+    finding_id: uuid.UUID | None = None
+    revision_sha: str | None = None
+    created_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
@@ -386,6 +400,12 @@ class TaskUpdate(BaseModel):
     due_date: datetime | None = None
     supervision_target_name: str | None = None
     remind_schedule: str | None = None
+    # Phase 2D provenance — updatable on an existing Task.
+    project_id: uuid.UUID | None = None
+    analysis_run_id: uuid.UUID | None = None
+    finding_id: uuid.UUID | None = None
+    revision_sha: str | None = None
+    created_reason: str | None = None
 
 
 class TaskLogCreate(BaseModel):
