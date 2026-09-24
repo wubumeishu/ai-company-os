@@ -244,3 +244,107 @@ class MaterializationOut(BaseModel):
     retryable: bool = False
     repositories: list[MaterializationRepoResult] = []
     limitations: list[str] = []
+
+
+# ─── Git Source Acquisition (Phase 2B-4, card t_4874c3e7) ──────────────────
+# Per docs/GIT_ACQ_DESIGN_V1.md §B.2: a service-owned CLOSED set of
+# acquisition result codes, deliberately distinct from the Intake 6-code set
+# (no cross-namespace string reuse).  Only the acquisition endpoint emits
+# these; the transport maps state -> status (201 acquired, 409 pending/
+# failed).  No schema change (design §C.4): the result rides in
+# repositories.locator JSON + the existing verified / pending_verifier /
+# retry_count columns.
+
+#: Closed acquisition result codes (design §B.2).
+ACQ_OK = "ACQ_OK"
+ACQ_SOURCE_NOT_FOUND = "ACQ_SOURCE_NOT_FOUND"
+ACQ_SOURCE_UNREACHABLE = "ACQ_SOURCE_UNREACHABLE"
+ACQ_AUTH_FAILED = "ACQ_AUTH_FAILED"
+ACQ_REF_NOT_FOUND = "ACQ_REF_NOT_FOUND"
+ACQ_SOURCE_INVALID = "ACQ_SOURCE_INVALID"
+ACQ_SECURITY_REJECTED = "ACQ_SECURITY_REJECTED"
+ACQ_TIMEOUT = "ACQ_TIMEOUT"
+ACQ_SIZE_LIMIT = "ACQ_SIZE_LIMIT"
+SUBMODULES_UNSUPPORTED = "SUBMODULES_UNSUPPORTED"
+
+ACQ_RESULT_CODES = frozenset(
+    {
+        ACQ_OK,
+        ACQ_SOURCE_NOT_FOUND,
+        ACQ_SOURCE_UNREACHABLE,
+        ACQ_AUTH_FAILED,
+        ACQ_REF_NOT_FOUND,
+        ACQ_SOURCE_INVALID,
+        ACQ_SECURITY_REJECTED,
+        ACQ_TIMEOUT,
+        ACQ_SIZE_LIMIT,
+        SUBMODULES_UNSUPPORTED,
+    }
+)
+
+#: The only codes a retry of the call can meaningfully change (design §D
+#: "retries" row / card §21): everything else is permanent and is NEVER
+#: retried (notably AUTH_FAILED and SECURITY_REJECTED, card §21).
+ACQ_RETRYABLE_CODES = frozenset({ACQ_SOURCE_UNREACHABLE, ACQ_TIMEOUT})
+
+
+def acq_code_is_retryable(code: str) -> bool:
+    """Whether a re-invocation of acquire can change the outcome for ``code``.
+
+    The closed-set guard mirrors ``intake_security.reason_code_is_retryable``:
+    an unknown code is a programming error, not a guess.
+    """
+    if code not in ACQ_RESULT_CODES:
+        raise ValueError(f"{code!r} is not in the closed acquisition code set {sorted(ACQ_RESULT_CODES)}")
+    return code in ACQ_RETRYABLE_CODES
+
+
+class AcquisitionOut(BaseModel):
+    """One acquisition call's result (design §B.2 / §C.2).
+
+    ``state`` is the closed transport-facing set:
+    - ``acquired`` — artifact + verified metadata written (201);
+    - ``pending``  — a transient failure within the retry budget: the result
+      is recorded but a re-invocation (bounded by repositories.retry_count,
+      MAX_RETRIES=3) can still reach a final outcome (409, retryable=True);
+    - ``failed``   — a permanent outcome, or a transient one whose retry
+      budget is exhausted (409, retryable=False, deterministic terminal).
+
+    ``message`` is bounded and secret-free by construction: it names the
+    CLASS of the problem, never a token, URL userinfo, or raw locator
+    (the credential-not-in-locator invariant, design §A.3 / card §5).
+    """
+
+    project_id: uuid.UUID
+    repo_id: uuid.UUID
+    agent_id: uuid.UUID
+    # Closed state set: "pending" | "acquired" | "failed"
+    state: str
+    # Closed code set: ACQ_OK | ACQ_* | SUBMODULES_UNSUPPORTED (None only
+    # for a not-yet-attempted status read).
+    code: str | None = None
+    retryable: bool = False
+    message: str = ""
+    requested_ref: str | None = None
+    resolved_rev: str | None = None
+    provider: str | None = None
+    artifact_key: str | None = None
+    acquired_at: datetime | None = None
+
+    @classmethod
+    def from_outcome(cls, outcome, *, project_id: uuid.UUID, repo_id: uuid.UUID, agent_id: uuid.UUID) -> "AcquisitionOut":
+        """Transport view of the service's :class:`AcquisitionOutcome`."""
+        return cls(
+            project_id=project_id,
+            repo_id=repo_id,
+            agent_id=agent_id,
+            state=outcome.state,
+            code=outcome.code,
+            retryable=outcome.retryable,
+            message=outcome.message,
+            requested_ref=outcome.requested_ref,
+            resolved_rev=outcome.resolved_rev,
+            provider=outcome.provider,
+            artifact_key=outcome.artifact_key,
+            acquired_at=outcome.acquired_at,
+        )

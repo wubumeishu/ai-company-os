@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import io
 import os
+import tarfile
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -284,9 +285,14 @@ class ProjectMaterializationService:
            repository that is not ``verified`` or is still ``pending_verifier``
            makes the call SOURCE_NOT_READY (defense-in-depth; a bad row fails
            closed, sibling repos are not blamed for it).
-        5. Git-source gate (spec §3.5): a git repo can never have passed
-           intake; seeing one is an explicit SOURCE_NOT_READY, never a fake
-           success.
+        5. Git-source gate (design GIT_ACQ_DESIGN_V1.md §C.3): a git repo
+           whose acquisition artifact is missing or not yet verified still
+           fails closed with SOURCE_NOT_READY (the Phase 2B-3 behavior — the
+           "enum first, capability later" marker is preserved by construction:
+           the absence of a verified ``locator.acq_artifact`` is exactly the
+           pre-acquisition state).  A git repo that HAS a verified acquisition
+           artifact passes the gate and is read by the git source reader
+           (``_plan_git``) — the ONE bounded tar, no re-clone.
         """
         intake_security.verify_tenant_scope(project.tenant_id, current_user.tenant_id)
         agent_tenant = getattr(agent, "tenant_id", None)
@@ -305,10 +311,15 @@ class ProjectMaterializationService:
                     code="SOURCE_NOT_READY",
                     message=f"repository {repo.id} is not verified-ready (verified={repo.verified}, pending_verifier={repo.pending_verifier})",
                 )
-            if repo.source_type in GIT_SOURCE_TYPES:
+            if repo.source_type in GIT_SOURCE_TYPES and not self._git_artifact_verified(repo):
+                # The ONE gate the acquisition work flips (design §C.3 / hook #2):
+                # a git repo passes pre-I/O ONLY when its acquisition produced
+                # a verified artifact.  The absence of the key, an unverified
+                # mark, or a pending verifier is the pre-acquisition state and
+                # keeps the Phase 2B-3 fail-closed behavior by construction.
                 raise MaterializationNotReady(
                     code="SOURCE_NOT_READY",
-                    message=f"repository {repo.id} ({repo.source_type}) has no V1 acquisition path",
+                    message=f"repository {repo.id} ({repo.source_type}) has no verified acquisition artifact",
                 )
 
     # ------------------------------------------------------------------
@@ -342,6 +353,8 @@ class ProjectMaterializationService:
                 await self._plan_document(plan)
             elif repo.source_type == "zip":
                 await self._plan_zip(plan)
+            elif repo.source_type in GIT_SOURCE_TYPES:
+                await self._plan_git(plan)
             else:
                 self._fail(plan, "SOURCE_INVALID", f"unsupported source_type {repo.source_type!r}")
                 return plan
@@ -527,6 +540,102 @@ class ProjectMaterializationService:
                 plan.rels.append(rel)
 
     # ------------------------------------------------------------------
+    # Git source reader (Phase 2B-4, design GIT_ACQ_DESIGN_V1.md §C.3):
+    # reads the ONE bounded tar the acquisition stage published.  No
+    # re-clone, no hooks, no install (card §17) — the artifact is the
+    # handoff object (card §11).
+    # ------------------------------------------------------------------
+
+    def _git_artifact_verified(self, repo: Repository) -> bool:
+        """Whether a git repo's acquisition artifact is present + verified.
+
+        The gate helper (design §C.3 hook #2): the locator must carry a
+        non-empty ``acq_artifact`` storage key AND the row must be marked
+        ``verified`` with the pending-verifier mark cleared.  This is the
+        ONLY condition that turns the git hard-gate fail-open; anything
+        short of it is the pre-acquisition state and stays
+        SOURCE_NOT_READY (the Phase 2B-3 behavior, preserved by
+        construction).
+        """
+        loc = repo.locator or {}
+        artifact = loc.get("acq_artifact")
+        if not isinstance(artifact, str) or not artifact:
+            return False
+        return bool(repo.verified) and not repo.pending_verifier
+
+    async def _plan_git(self, plan: _RepoPlan) -> None:
+        """Read the acquisition tar into the plan payload (git source reader).
+
+        Reads the ONE bounded object via the storage facade (no re-clone —
+        card §11), re-runs the SAME shared member-path normalizer +
+        reserved-name check the other readers use (design §18 "one rule,
+        never a second contradicting set"), and follows the exact read
+        discipline of ``_plan_local_folder`` (symlinks never followed,
+        source never modified).  A missing artifact is SOURCE_NOT_FOUND
+        (the gate already fails this pre-I/O; this is the per-repo path),
+        an unreadable object is SOURCE_UNREACHABLE, and an unsafe member
+        is SECURITY_REJECTED (0 writes).
+        """
+        loc = plan.repo.locator or {}
+        raw_key = loc.get("acq_artifact")
+        if not isinstance(raw_key, str) or not raw_key:
+            raise _RepoUnreachable(
+                "SOURCE_NOT_FOUND",
+                "git acquisition artifact is not present in the repository locator",
+            )
+        key = normalize_storage_key(raw_key)
+        backend = get_storage_backend()
+        try:
+            if not await backend.exists(key):
+                raise _RepoUnreachable("SOURCE_NOT_FOUND", f"git artifact {key!r} not found in storage")
+            data = await backend.read_bytes(key)
+        except SecurityError:
+            raise  # storage-layer security finding -> 409, never unreachable
+        except _RepoUnreachable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - storage outage / unreadable object -> transient hold (local-folder parity)
+            raise _RepoUnreachable("SOURCE_UNREACHABLE", f"git artifact could not be read ({exc.__class__.__name__})")
+        # Pure in-memory unpack (the acquisition tar carries only the
+        # working tree — no .git metadata, no hooks, card §17).  A tar
+        # member is never extracted to disk; bytes go straight to the
+        # payload like the zip reader.  A corrupt / truncated object is a
+        # transient unreadable source (SOURCE_UNREACHABLE, local-folder
+        # parity), NOT a 500: the unpack is guarded, security rejections
+        # raised inside it still propagate.
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r") as archive:
+                for member in archive.getmembers():
+                    if member.isdir():
+                        continue
+                    if member.issym() or member.islnk():
+                        # A symlink / hardlink inside the artifact is an
+                        # escape vector: recorded and skipped, never
+                        # followed (card §18, the same discipline as
+                        # _plan_local_folder).
+                        continue
+                    if not member.isfile():
+                        continue
+                    # Second-depth guard (spec §2.2): the intake-time
+                    # acquisition post-checks are not a trust credential —
+                    # re-normalize the member path and assert its prefix
+                    # before it becomes a write target.
+                    rel = self._normalize_rel(member.name)
+                    if rel is None:
+                        raise _RepoRejected("SECURITY_REJECTED", "git artifact member path contains a traversal segment")
+                    first = rel.split("/", 1)[0]
+                    if first in RESERVED_STORAGE_NAMES:
+                        raise _RepoRejected("SECURITY_REJECTED", f"reserved git artifact member {member.name!r}")
+                    handle = archive.extractfile(member)
+                    if handle is None:
+                        continue
+                    plan.payload[rel] = handle.read()
+                    plan.rels.append(rel)
+        except tarfile.TarError as exc:
+            raise _RepoUnreachable(
+                "SOURCE_UNREACHABLE", f"git artifact is not a readable tar ({exc.__class__.__name__})"
+            ) from None
+
+    # ------------------------------------------------------------------
     # Key / name / rel rules (spec §2).
     # ------------------------------------------------------------------
 
@@ -549,20 +658,17 @@ class ProjectMaterializationService:
     def _normalize_rel(rel: str) -> str | None:
         """Normalize a source-relative path (spec §2.2); None when unsafe.
 
-        Backslash -> slash; empty and ``.`` segments are dropped; ANY ``..``
-        segment or NUL byte is a traversal vector and rejects the whole repo
-        (never popped, unlike the permissive storage-key normalizer).
+        Delegates to the ONE shared rule,
+        :func:`app.services.intake_security.normalize_rel` (design
+        GIT_ACQ_DESIGN_V1.md §D "path safety" / card §18 "never a second,
+        contradicting rule set"): backslash -> slash; empty and ``.``
+        segments are dropped; ANY ``..`` segment or NUL byte is a traversal
+        vector and rejects the whole repo (never popped, unlike the
+        permissive storage-key normalizer).  Keeping the shared function as
+        the single owner means the acquisition post-checks and the
+        materialization readers can never drift into two rule sets.
         """
-        if not rel or "\x00" in rel:
-            return None
-        parts: list[str] = []
-        for part in rel.replace("\\", "/").split("/"):
-            if part in ("", "."):
-                continue
-            if part == "..":
-                return None
-            parts.append(part)
-        return "/".join(parts) if parts else None
+        return intake_security.normalize_rel(rel)
 
     def _check_rel_shape(self, plan: _RepoPlan, rel: str | None, display: str) -> str:
         """Validate a source name / first-segment and return the safe ``rel``.

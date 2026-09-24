@@ -469,7 +469,7 @@ class ProjectIntakeService:
         if source_type == "zip":
             return await self._validate_zip(repo)
         if source_type in GIT_SOURCE_TYPES:
-            return await self._validate_unsupported(repo)
+            return await self._validate_git(repo)
         # Unknown source_type (the schema layer should have blocked this):
         # treat as unsupported rather than inventing a validator.
         return self._not_supported_outcome(f"source_type {source_type!r} has no V1 verifier")
@@ -721,6 +721,35 @@ class ProjectIntakeService:
                 retryable=intake_security.reason_code_is_retryable(verdict.reason_code),
             )
         return ValidationOutcome(ok=True)
+
+    async def _validate_git(self, repo: Repository) -> ValidationOutcome:
+        """The Phase 2B-4 flip (design GIT_ACQ_DESIGN_V1.md §C.3).
+
+        A git source validates OK only when its acquisition produced a
+        verified artifact: the locator carries a non-empty ``acq_artifact``
+        key AND the row is marked ``verified`` with the pending-verifier
+        mark cleared (the acquisition's ``_record_success`` stamps exactly
+        these).  A NOT-acquired git source keeps the old behavior —
+        ``SOURCE_NOT_SUPPORTED``, permanent — so the fail-closed boundary
+        is preserved by construction: the absence of the artifact key is
+        precisely the pre-acquisition state.  The 6-code intake set, the
+        retry budget, and the REJECTED terminal semantics are untouched.
+        """
+        loc = repo.locator or {}
+        artifact = loc.get("acq_artifact")
+        if isinstance(artifact, str) and artifact and repo.verified and not repo.pending_verifier:
+            # A verified acquisition artifact exists: the source is valid.
+            # The acquisition stage already verified the row (verified=True,
+            # pending_verifier=False); this gate only re-asserts the shape
+            # so intake and materialization share ONE source of truth.
+            return ValidationOutcome(ok=True)
+        # Not acquired: the same explicit SOURCE_NOT_SUPPORTED the V1
+        # capability marker emitted (brief §4.4 / "enum first, capability
+        # later").  Permanent — re-running does not change it; the caller
+        # must acquire the source first.
+        return self._not_supported_outcome(
+            f"{repo.source_type} source: no verified acquisition artifact (Phase 2B-4 git acquisition required first)"
+        )
 
     async def _validate_unsupported(self, repo: Repository) -> ValidationOutcome:
         # No V1 verifier for git sources (brief §4.4): explicit

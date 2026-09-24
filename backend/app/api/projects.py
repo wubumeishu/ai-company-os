@@ -12,6 +12,11 @@ Routes (brief §3.1):
     GET    /api/projects                          list (current tenant)
     GET    /api/projects/{project_id}             detail (repositories + reason)
     POST   /api/projects/{project_id}/validate     explicit source validation
+    POST   /api/projects/{project_id}/materialize/{agent_id}   materialize
+    POST   /api/projects/{project_id}/repositories/{repo_id}/acquire/{agent_id}
+                                                 acquire a git source (Phase 2B-4)
+    GET    /api/projects/{project_id}/repositories/{repo_id}/acquire/{agent_id}
+                                                 acquisition status
 
 Status-code mapping (brief §3.2 + security module's mapping table):
     create 201 on success; request validation fails with 422 before any
@@ -33,14 +38,19 @@ from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.dao.project_intake_dao import project_dao
 from app.database import get_db
-from app.models.project import Project
+from app.models.project import Project, Repository
 from app.models.user import User
 from app.schemas.project_intake import (
+    AcquisitionOut,
     MaterializationOut,
     MaterializeRequest,
     ProjectIntakeCreate,
     ProjectOut,
     RejectionInfo,
+)
+from app.services.git_acquisition_service import (
+    AcquisitionSecurity,
+    git_acquisition_service,
 )
 from app.services.intake_security import (
     ReadForbidden,
@@ -280,3 +290,117 @@ async def materialize_project(
         # serves the 409 while the successful repos' detail is preserved.
         response.status_code = status.HTTP_409_CONFLICT
     return result
+
+
+# ---------------------------------------------------------------------------
+# Git Source Acquisition (Phase 2B-4, design GIT_ACQ_DESIGN_V1.md §C.2)
+#
+# Both routes live under the same router + the existing
+# ``_load_authorized_project`` read gate; the target agent is authorized by
+# ``check_agent_access`` (404/403 propagate) exactly like the materialize
+# route, and the service re-asserts every isolation gate fail-closed so a
+# background caller that skips the transport cannot cross tenants.  The
+# transport is a pure adapter (backend AGENTS.md): all policy — the closed
+# ACQ_* codes, the retry budget, the tenant gates, the artifact publish —
+# lives in the service; this module only maps the outcome to the status.
+# ---------------------------------------------------------------------------
+
+
+def _find_repo(project: Project, repo_id: uuid.UUID) -> "Repository":
+    """The repository row inside the authorized project, else a 404.
+
+    ``_load_authorized_project`` eager-loads the repositories, so a repo id
+    that belongs to another tenant / project is simply not in the list —
+    the same tenant-invisibility-404 the project load relies on, never a
+    cross-tenant disclosure.
+    """
+    for repo in list(getattr(project, "repositories", None) or []):
+        if repo.id == repo_id:
+            return repo
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+
+
+@router.post(
+    "/{project_id}/repositories/{repo_id}/acquire/{agent_id}",
+    response_model=AcquisitionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def acquire_repository(
+    project_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Acquire a registered git source into a verified, bounded artifact.
+
+    The target agent (``agent_id``) supplies the credential scope, the
+    tenant-isolation gate, and the artifact's agent-scoped storage key —
+    the same authorization pattern the materialize route uses.  The ref
+    context is the repository's locator as registered (no body).
+
+    Status mapping (design §C.2):
+      - 201 on ``acquired`` — artifact + verified metadata written; the
+        later materialization reads exactly this object (no re-clone).
+      - 409 on ``pending`` (a transient failure still inside the bounded
+        retry budget; ``retryable=True``) or ``failed`` (a permanent
+        outcome or an exhausted transient budget; ``retryable=False``) —
+        never a 2xx that would misread an un-acquired source as ready.
+      - 403 when the caller crosses a tenant security boundary
+        (``AcquisitionSecurity``); 404/403 from ``check_agent_access``.
+
+    The handler NEVER triggers a downstream Agent / Run / prompt /
+    execution: it returns the acquisition result and stops (card §3 /
+    card §23 — Acquisition is its own stage, the handoff is the artifact).
+    """
+    project = await _load_authorized_project(db, project_id, current_user)
+    repo = _find_repo(project, repo_id)
+    agent, _access_level = await check_agent_access(db, current_user, agent_id)  # 404/403 propagate
+    try:
+        outcome = await git_acquisition_service.acquire(
+            db,
+            project=project,
+            repo=repo,
+            agent=agent,
+            current_user=current_user,
+        )
+    except (AcquisitionSecurity, TenantScopeViolation):
+        # A tenant-isolation / scope violation at the entry gate (the M9
+        # fourth gate or the re-asserted verify_tenant_scope): one narrow
+        # 403, mirroring the materialization handler's
+        # MaterializationSecurity + TenantScopeViolation -> 403 mapping.
+        # No write happened.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No access: this acquisition crosses a tenant security boundary",
+        ) from None
+    result = AcquisitionOut.from_outcome(outcome, project_id=project.id, repo_id=repo.id, agent_id=agent.id)
+    if outcome.state != "acquired":
+        # pending / failed: a 409 carrying the same AcquisitionOut body,
+        # the way materialize serves PARTIAL / FAILED (design §C.2).
+        response.status_code = status.HTTP_409_CONFLICT
+    return result
+
+
+@router.get("/{project_id}/repositories/{repo_id}/acquire/{agent_id}", response_model=AcquisitionOut)
+async def acquire_repository_status(
+    project_id: uuid.UUID,
+    repo_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reconstruct a git repository's stored acquisition result.
+
+    Reads the locator metadata (``acq_artifact`` / ``acq_result`` /
+    ``resolved_rev`` ...) and the repo's verified / pending-verifier /
+    retry marks; it performs no git work.  A not-yet-attempted repo is a
+    ``pending`` with no code.  200 always — status reads have no conflict
+    semantics (a ``failed`` state is data, not a transport error).
+    """
+    project = await _load_authorized_project(db, project_id, current_user)
+    repo = _find_repo(project, repo_id)
+    agent, _access_level = await check_agent_access(db, current_user, agent_id)  # 404/403 propagate
+    outcome = await git_acquisition_service.status(db, repo=repo, agent=agent)
+    return AcquisitionOut.from_outcome(outcome, project_id=project.id, repo_id=repo.id, agent_id=agent.id)
