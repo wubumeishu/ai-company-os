@@ -78,6 +78,7 @@ from app.schemas.project_intake import (
     ACQ_AUTH_FAILED,
     ACQ_OK,
     ACQ_REF_NOT_FOUND,
+    ACQ_RESULT_CODES,
     ACQ_SECURITY_REJECTED,
     ACQ_SIZE_LIMIT,
     ACQ_SOURCE_INVALID,
@@ -322,6 +323,19 @@ class GitAcquisitionService:
         """
         loc = repo.locator or {}
         code = loc.get("acq_result")
+        # F1 (audit t_31f91B3A): ``acq_result`` is INTAKE USER INPUT for git
+        # sources (the locator is a free-form dict; the create-time credential
+        # scan rejects only credential-shaped values, so ``"TOTALLY_BOGUS"``
+        # or ``""`` can be persisted).  The closed-set guard is meant to
+        # catch a programming error, but this value crosses the status
+        # boundary as trusted user data — so it is validated here against
+        # ``ACQ_RESULT_CODES`` and an out-of-set / empty / non-string value
+        # degrades to a safe read (``code=None`` -> the not-yet-attempted
+        # pending reconstruction below), NEVER a raised ValueError.  The
+        # GET is a client-reachable route that must never surface a 500
+        # (the acquire() docstring contract, design §C.2).
+        if not isinstance(code, str) or code not in ACQ_RESULT_CODES:
+            code = None
         artifact_key = loc.get("acq_artifact")
         resolved_rev = loc.get("resolved_rev")
         requested_ref = loc.get("requested_ref")
@@ -738,11 +752,38 @@ class GitAcquisitionService:
         The line ``ref: refs/heads/<name>\\tHEAD`` carries the remote's
         default; when absent (empty repo / unusual remote) return None and
         let the plain clone use its HEAD.  Never a hardcoded ``main``.
+
+        F2 (audit t_31f91B3A) — two independent fixes, both required:
+
+        1. argv order: git's grammar is ``ls-remote [--symref] <repository>
+           [<refs>]``, so the URL is the repository position and ``HEAD``
+           the ref filter.  The previous inversion (``HEAD`` first, URL
+           last) made git parse repository="HEAD" and ALWAYS exit 128,
+           which ``allow_failure=True`` swallowed — so this read was dead
+           code that "failed" silently on every call.
+        2. parse: the symref ref line is tab-delimited
+           (``refs/heads/<name>\\tHEAD``); the branch name is the segment
+           BEFORE the tab.  The old ``split("refs/heads/",1)[-1].strip()``
+           returned ``<name>\\tHEAD`` (the mid-string tab survives
+           ``strip()``), which fails ``_REF_RE`` and would make the later
+           ``git checkout`` fail with "invalid refname".
         """
-        out = await self._git(["ls-remote", "--symref", "HEAD", url], None, env, deadline, allow_failure=True)
+        out = await self._git(["ls-remote", "--symref", url, "HEAD"], None, env, deadline, allow_failure=True)
         for line in out.splitlines():
-            if line.startswith("ref:") and "\tHEAD" in line:
-                return line.split("refs/heads/", 1)[-1].strip()
+            if not line.startswith("ref:"):
+                continue
+            # Symref line: ``ref: <full-ref>\tHEAD`` — the ref name is the
+            # tab-delimited first field; strip the ``refs/heads/`` prefix.
+            ref_field = line[len("ref:"):].split("\t", 1)[0].strip()
+            name = ref_field.removeprefix("refs/heads/")
+            if not name:
+                continue
+            if not _REF_RE.fullmatch(name):
+                # A ref-name outside the shape gate is not a branch we may
+                # hand to git: degrade to the clone's own HEAD (never a
+                # hardcoded "main").
+                return None
+            return name
         return None
 
     def _git_env(self, token: str | None, url: str | None) -> dict[str, str]:

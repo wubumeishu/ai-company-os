@@ -38,6 +38,7 @@ import io
 import os
 import subprocess
 import tarfile
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -704,6 +705,30 @@ def test_status_verified_artifact_is_acquired(svc) -> None:
     assert out.state == "acquired" and out.code == ACQ_OK and out.artifact_key == "k" and out.resolved_rev == "r" * 40
 
 
+@pytest.mark.parametrize(
+    "bogus",
+    [
+        "TOTALLY_BOGUS",  # out-of-set free-form string (the audit's repro value)
+        "",  # empty string: no result recorded yet, not a terminal failure
+        42,  # non-string JSON value a caller could persist
+        {"a": 1},  # a non-string object
+    ],
+)
+def test_status_out_of_set_acq_result_is_a_safe_read_never_500(svc, bogus) -> None:
+    # F1 (audit t_31f91B3A): acq_result is free-form intake user input for git
+    # sources, so a value outside the closed ACQ set (or empty / non-string)
+    # crosses the status boundary as data, not a programming error.  The old
+    # path fed it straight into acq_code_is_retryable -> ValueError -> an
+    # unhandled 500 on the client-reachable GET route.  It must now degrade to
+    # a safe read: a not-yet-attempted pending (code=None, retryable) — at the
+    # transport that is a 200/409 body, NEVER a 500.
+    repo = _repo("github", {"url": GITHUB_E2E_URL, "acq_result": bogus}, uuid.uuid4())
+    out = _run_sync(svc.status(_FakeDB(), repo=repo, agent=_agent(repo.tenant_id)))
+    assert out.state == "pending"
+    assert out.code is None
+    assert out.retryable
+
+
 # ---------------------------------------------------------------------------
 # 11. Materialization git reader — reads the ONE tar, no re-clone (card §11)
 # ---------------------------------------------------------------------------
@@ -1016,6 +1041,46 @@ def test_e2e_url_rejection_spawns_no_process(svc, monkeypatch) -> None:
     _no_spawn(svc, monkeypatch)
     outcome = _run_sync(svc.acquire(_FakeDB(), project=_project(tenant), repo=repo, agent=_agent(tenant), current_user=_user(tenant)))
     assert outcome.state == "failed" and outcome.code == ACQ_SECURITY_REJECTED and not outcome.retryable
+
+
+def _make_default_repo(base: Path, default: str = "acqmain") -> Path:
+    """A real git repo whose HEAD symref is a NON-main default branch.
+
+    Unlike ``make_local_repo`` (which then moves HEAD to a second branch),
+    this repo is left exactly where ``git init -b <default>`` put it: one
+    commit, HEAD -> ``refs/heads/<default>``.  That is the remote's OWN
+    default branch, the thing ``ls-remote --symref <url> HEAD`` reports —
+    and it is deliberately not "main".
+    """
+    repo_dir = base / "upstream-default"
+    repo_dir.mkdir()
+    _git_run(["init", "-q", "-b", default], repo_dir)
+    _git_run(["config", "user.email", "acq@example.com"], repo_dir)
+    _git_run(["config", "user.name", "acq-test"], repo_dir)
+    (repo_dir / "a.txt").write_text("alpha\n")
+    _git_run(["add", "a.txt"], repo_dir)
+    _git_run(["commit", "-q", "-m", "one"], repo_dir)
+    return repo_dir
+
+
+def test_default_branch_resolves_a_non_main_default(svc, tmp_path) -> None:
+    # F2 (audit t_31f91B3A): _default_branch is the no-ref remote path's way
+    # of reading the remote's OWN default branch (card §6/§14 — never hardcoded
+    # "main").  Drive it against a REAL local git repo whose default branch is
+    # "acqmain" (explicit -b acqmain, no host init.defaultBranch dependency):
+    # assert the returned name EXACTLY equals that repo's actual default
+    # branch read via git symbolic-ref.  Both the ls-remote argv order and the
+    # tab-delimited ref-line parse must be right, since neither bug is masked
+    # by a "main" default.
+    repo_dir = _make_default_repo(tmp_path)
+    actual_default = _git_run(["symbolic-ref", "--short", "HEAD"], repo_dir)
+    assert actual_default == "acqmain"  # the test premise: a non-"main" default
+
+    env = svc._git_env(None, None)
+    deadline = time.monotonic() + 60
+    resolved = _run_sync(svc._default_branch(str(repo_dir), env, deadline))
+    assert resolved == actual_default
+    assert resolved == "acqmain"
 
 
 # ---------------------------------------------------------------------------

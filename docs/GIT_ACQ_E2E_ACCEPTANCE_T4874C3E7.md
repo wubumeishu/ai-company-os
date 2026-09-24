@@ -200,5 +200,103 @@ acquisition stage starts no downstream Agent / Run / prompt. Final verdict:
   semantics are untouched — the flip is the one gate inside the existing
   dispatch (design §C.3 / card §19).
 
+## 8. Re-work (F1/F2) evidence — audit t_31f91B3a, security review REQUEST_CHANGES
+
+The independent security audit (`docs/GIT_ACQ_SECURITY_AUDIT_T31F91B3A.md` on
+`wt/t_31f91b3a` @ `893943f1`) returned **REQUEST_CHANGES** with 2 blocking
+defects (F1 High, F2 Medium) + 1 documented threat-model note (F3). All are
+fixed in this re-work commit on the SAME branch `wt/t_4874c3e7` (no schema
+change, no scope broadening, no `main` / push). Two files changed:
+`app/services/git_acquisition_service.py` + `tests/test_git_acquisition_service.py`.
+
+### 8.1 F1 [High] — `status()` 500'd on a user-registered out-of-set `acq_result`
+
+**Root cause.** For git sources the persisted locator JSON is FREE-FORM intake
+user input (`SourceSpec.locator` is a dict; the create-time credential scan
+rejects only credential-shaped values, so `{"acq_result": "TOTALLY_BOGUS"}` —
+and `""`, and a non-string — passes). `status()` read that value and fed it
+directly into `acq_code_is_retryable(code)`, whose closed-set guard raises
+`ValueError` on an unknown code. That `ValueError` is a programming-error
+signal, not a data path — unhandled it surfaces as an HTTP **500** on the
+client-reachable GET route (`api/projects.py` `acquire_repository_status`),
+violating the `acquire()` contract that client-reachable inputs never surface
+a 500.
+
+**Fix (git_acquisition_service.py `status()`).** The stored code is validated
+against `ACQ_RESULT_CODES` BEFORE the retryable computation: an out-of-set,
+empty, or non-string value degrades to a **safe read** (`code=None`, the
+not-yet-attempted `pending` reconstruction, `retryable=True`) and NEVER raises.
+The closed-set guard is preserved for its real purpose (catching a
+programming error on a code the service itself produced); it no longer sees
+trusted user data.
+
+**Regression test.** `test_status_out_of_set_acq_result_is_a_safe_read_never_500`
+parametrized over `"TOTALLY_BOGUS"` / `""` / `42` / `{"a": 1}`: each returns
+`state=pending`, `code=None`, `retryable=True` (a 200/409 body at the
+transport, never a 500).
+
+### 8.2 F2 [Medium] — `_default_branch` dead code: two independent bugs
+
+**Root cause (A, argv order).** The call was
+`["ls-remote", "--symref", "HEAD", url]`. Git's grammar is
+`ls-remote [--symref] <repository> [<refs>]`, so git parsed repository=`HEAD`
+and ref=`<url>` and ALWAYS exited 128 (`fatal: 'HEAD' does not appear to be a
+git repository`), swallowed by `allow_failure=True` → the read silently
+returned `None` on every call. **Reproduced against the real git binary.**
+
+**Root cause (B, line parse).** Even with the order fixed, the real ref line
+is `ref: refs/heads/<name>\tHEAD` (tab-delimited). The old expression
+`line.split("refs/heads/", 1)[-1].strip()` returned `'<name>\tHEAD'` — the
+mid-string tab survives `strip()` — which fails `_REF_RE` and would make the
+later `git checkout` fail "invalid refname" for a perfectly valid public
+repo. **Reproduced against the real git binary.**
+
+**Fix (git_acquisition_service.py `_default_branch`).** BOTH fixes:
+(1) reorder to `["ls-remote", "--symref", url, "HEAD"]`;
+(2) parse the branch name from the ref line as the tab-delimited first field
+(`line[len("ref:"):].split("\t", 1)[0].strip().removeprefix("refs/heads/")`)
+and re-validate it against `_REF_RE` (a ref outside the gate degrades to the
+clone's own HEAD — never a hardcoded `main`).
+
+**Regression test.** `test_default_branch_resolves_a_non_main_default` drives
+`_default_branch` against a REAL local repo whose HEAD symref is a NON-main
+default branch (`acqmain`, built by `_make_default_repo` with explicit
+`git init -b acqmain` so no host `init.defaultBranch` dependency) and asserts
+the returned name EXACTLY equals `git symbolic-ref --short HEAD` of that repo
+— neither bug is masked by a "main" default.
+
+### 8.3 Re-work verification gates (all run on this commit)
+
+| # | Gate | Command (from `backend/`) | Result |
+|---|------|---------------------------|--------|
+| 1 | DB-free service + security | `uv run --extra dev pytest tests/test_git_acquisition_service.py tests/test_intake_security.py -q` | **132 passed, 1 skipped** (the 2 new F1/F2 tests lift the suite from the reviewer's 128/1-skip; the 1 skip is the GitHub-egress remote test) |
+| 2 | 2B-2/2B-3 regression battery | `uv run --extra dev pytest tests/test_project_intake_service.py tests/test_project_materialization_service.py tests/test_materialization_edge_cases.py -q` | **133 passed** |
+| 3 | Real-DB E2E (scratch Postgres `clawith_t4874c3e7_e2e`) | `DATABASE_URL=… pytest tests/test_materialization_e2e_acceptance.py tests/test_intake_e2e_acceptance.py tests/test_git_acquisition_e2e_acceptance.py -q` | **39 passed** |
+| 4 | pyright on touched app files | `uv run --extra dev pyright app/services/git_acquisition_service.py app/api/projects.py app/schemas/project_intake.py` | **0 errors, 0 warnings** |
+| 5 | ruff on the 2 re-worked files + schema | `uv run --extra dev ruff check app/services/git_acquisition_service.py tests/test_git_acquisition_service.py app/schemas/project_intake.py` | **All checks passed** (the 14 `api/projects.py` B008 `Depends` findings are the pre-existing repo-wide baseline, untouched by this commit) |
+| 6 | Alembic single-head | `uv run --extra dev alembic heads` | **single head `f067_intake_rejection_fields`**, no new revision |
+| 7 | New regression tests present + passing | F1 + F2 tests in gate #1 | **present and green** |
+
+## 9. Known Threat-Model Notes (F3) — CGNAT, cloud-metadata (docs only, no code change)
+
+F3 of the audit is a Low, docs-only observation; it records host-gate
+behavior that is empirically re-verified in this re-work (no code touched):
+
+- **CGNAT `100.64.0.0/10` literals PASS the host gate.** Python's
+  `ipaddress` does not classify the shared-CGNAT / "shared address space"
+  (RFC 6598 `100.64.0.0/10`) as private / loopback / link-local /
+  reserved / unspecified, so `intake_security.is_unsafe_host` /
+  `git_url_detail` accept an IP-literal URL in that range. **Re-verified
+  this re-work:** `git_url_detail("https://100.64.0.1/x")` and
+  `("https://100.127.255.254/x")` both return `None` (safe).
+- **Cloud-metadata `169.254.169.254` IS rejected** (link-local) —
+  **re-verified:** `git_url_detail("https://169.254.169.254/latest")`
+  returns "URL host is a private / reserved IP literal".
+- **Scope ruling:** CGNAT is operator-space, not a classic SSRF vector
+  (the cloud-metadata endpoint and RFC1918 / loopback remain rejected).
+  It is OUTSIDE the card's stated threat model (cloud-internal + RFC1918 +
+  loopback). Recorded here for a future threat-model card; **no code change
+  on this card.**
+
 ---
 End of report. Absolute path: `I:\project\AI Company OS\.worktrees\t_4874c3e7\docs\GIT_ACQ_E2E_ACCEPTANCE_T4874C3E7.md`
