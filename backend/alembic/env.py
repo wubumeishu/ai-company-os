@@ -39,7 +39,7 @@ from app.models.schedule import AgentSchedule  # noqa: F401
 from app.models.session_context_state import SessionContextState  # noqa: F401
 from app.models.skill import Skill, SkillFile  # noqa: F401
 from app.models.system_settings import SystemSetting  # noqa: F401
-from app.models.task import Task, TaskLog  # noqa: F401
+from app.models.task import Task, TaskDependency, TaskLog  # noqa: F401
 from app.models.tenant import Tenant  # noqa: F401
 from app.models.tenant_setting import TenantSetting  # noqa: F401
 from app.models.tool import Tool  # noqa: F401
