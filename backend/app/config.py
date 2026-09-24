@@ -1,11 +1,11 @@
 """Application configuration."""
 
-from functools import lru_cache
 import os
-from pathlib import Path
 import socket
-from typing import Self
 import uuid
+from functools import lru_cache
+from pathlib import Path
+from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -208,6 +208,14 @@ class Settings(BaseSettings):
     SANDBOX_HTTP_PROXY: str = ""
     SANDBOX_HTTPS_PROXY: str = ""
     SANDBOX_NO_PROXY: str = ""
+
+    # Git source acquisition (Phase 2B-4, card t_4874c3e7).  A bounded clone /
+    # fetch wall for the git acquisition service: the whole acquire call (URL
+    # validation + clone + ref verify + publish) must finish within this many
+    # seconds or it is ACQ_TIMEOUT.  This is a NEW key, deliberately distinct
+    # from the sandbox timeout above (different semantics — it bounds a
+    # single network acquisition, not agent code execution).
+    GIT_ACQUISITION_MAX_SECONDS: int = 300
 
     @field_validator(
         "LANGGRAPH_CHECKPOINT_DATABASE_URL",

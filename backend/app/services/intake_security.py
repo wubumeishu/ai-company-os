@@ -43,9 +43,12 @@ ReadForbidden         caller is neither creator nor same-tenant admin 403
 from __future__ import annotations
 
 import io
+import ipaddress
 import re
+import socket
 import zipfile
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 __all__ = [
     "INTAKE_TRANSITIONS",
@@ -64,7 +67,10 @@ __all__ = [
     "can_transition",
     "check_host_path",
     "check_zip_slip",
+    "git_url_detail",
     "is_terminal_intake_status",
+    "is_unsafe_host",
+    "normalize_rel",
     "path_traversal_detail",
     "reason_code_is_retryable",
     "scan_locator_for_credentials",
@@ -265,7 +271,143 @@ def _is_absolute_host_path(raw: str) -> bool:
     """A host absolute path: POSIX ``/...`` or a Windows drive ``X:\\...``/``X:/...``."""
     if raw.startswith("/"):
         return True
-    return re.match(r"^[A-Za-z]:[\\/]", raw) is not None
+    return re.match(r"^[A-Za-z]:[\\\/]", raw) is not None
+
+
+# ---------------------------------------------------------------------------
+# Git source acquisition security (Phase 2B-4, card t_4874c3e7)
+#
+# Three shared, stdlib-only guards the Git acquisition service (and, for the
+# member-path normalizer, the Materialization git-reader) MUST call so a
+# second, contradicting rule set never exists:
+#
+#   - :func:`is_unsafe_host`  — the cross-product SSRF rule.  Promotes the
+#     ``trigger_runtime/evaluator`` ``is_private_url`` logic here (intake
+#     security owns the cross-product rule; the trigger is only a consumer)
+#     and fails closed on ANY exception (design §A.5 / §D "SSRF" row).
+#   - :func:`git_url_detail`  — the URL-scheme gate that did not exist anywhere
+#     in the codebase (design §A.5 GAP): https-only, reject file/ssh/ftp/
+#     javascript/data, reject userinfo, and delegate the host decision to
+#     :func:`is_unsafe_host`.  ``validate_git_url`` is this pair.
+#   - :func:`normalize_rel`   — the ONE source-relative path normalizer, shared
+#     by the acquisition post-checks and the Materialization git-reader
+#     (design §18 "same rule", §10 "symlinks never followed").
+#
+# All three return a *detail string* on rejection and ``None`` on acceptance,
+# mirroring :func:`path_traversal_detail` / :func:`sensitive_root_detail`
+# so a bounded, secret-free detail can be stored / returned.
+# ---------------------------------------------------------------------------
+
+#: The only scheme the Git acquisition service will clone over.  Every other
+#: scheme (file / ssh / ftp / javascript / data / gopher / ...) is an unsafe
+#: protocol and is rejected — a git remote is an https URL in V1.
+_GIT_SAFE_SCHEMES = frozenset({"https"})
+
+
+def is_unsafe_host(url: str) -> str | None:
+    """Return a detail string if the URL's host is an SSRF vector, else None.
+
+    This is the single authoritative cross-product SSRF rule (design §A.5 /
+    §D): it owns "is this host addressable safely?".  The rules:
+
+    - a URL with no parseable hostname is unsafe (fail closed);
+    - loopback / localhost / 0.0.0.0 are unsafe by name;
+    - any hostname that resolves to a private / loopback / link-local /
+      reserved / unspecified IPv4-or-IPv6 address is unsafe — this catches
+      the cloud metadata endpoint (``169.254.169.254``), RFC1918 ranges
+      (``10.0.0.0/8`` ...), and ``::1`` / ``fe80::/10``;
+    - a hostname that cannot be resolved at all is unsafe (fail closed —
+      we cannot prove it is safe).
+
+    Any exception from the parse or the ``getaddrinfo`` probe returns an
+    unsafe detail (the "fail-closed on exception" rule, design §A.5).  A
+    bare ``"http"`` substring check is NOT sufficient and is deliberately
+    not the rule — the scheme is enforced separately by
+    :func:`git_url_detail`.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:  # noqa: BLE001 - any parse failure is an unclassifiable host: fail closed
+        return "URL could not be parsed"
+    hostname = parsed.hostname
+    if not hostname:
+        return "URL has no parseable hostname"
+    lowered = hostname.lower()
+    if lowered in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return "URL host is a loopback / metadata address"
+    # A numeric host is already an IP literal: classify it directly without
+    # a (possibly DNS-lying) getaddrinfo round-trip.
+    try:
+        ip_literal = ipaddress.ip_address(hostname)
+        if ip_literal.is_private or ip_literal.is_loopback or ip_literal.is_link_local or ip_literal.is_reserved or ip_literal.is_unspecified:
+            return "URL host is a private / reserved IP literal"
+        return None
+    except ValueError:
+        pass  # not an IP literal — a hostname; resolve it below.
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified:
+                return "URL host resolves to a private / reserved address"
+    except (socket.gaierror, OSError):
+        return "URL host could not be resolved (failing closed)"
+    except Exception:  # noqa: BLE001 - any classification failure is an unclassifiable host: fail closed
+        return "URL host could not be classified (failing closed)"
+    return None
+
+
+def git_url_detail(url: object) -> str | None:
+    """Return a detail string if a git source URL is unsafe, else None.
+
+    The combined gate :func:`is_unsafe_host` + https-only scheme (design
+    §A.5 GAP): the URL must be a non-empty string, must parse, must use the
+    https scheme, must carry no userinfo (``user:pass@``), and its host must
+    pass :func:`is_unsafe_host`.  This is ``validate_git_url`` for the
+    GitHub / GitLab remote source types.  ``local_git`` never reaches this
+    gate — it is a host path and is checked by
+    :func:`check_host_path` instead.
+    """
+    if not isinstance(url, str) or not url:
+        return "git source requires a non-empty URL"
+    try:
+        parsed = urlparse(url)
+    except Exception:  # noqa: BLE001 - any parse failure is an unclassifiable URL: fail closed
+        return "URL could not be parsed"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _GIT_SAFE_SCHEMES:
+        return f"git source URL scheme {scheme!r} is not allowed (https only)"
+    if parsed.username or parsed.password:
+        return "git source URL must not embed credentials in its userinfo"
+    return is_unsafe_host(url)
+
+
+#: Shared source-relative path normalizer, the ONE rule for every
+#: git-acquired / zip / folder member path (design §18 / §10, "never a second,
+#: contradicting rule set").  Mirrors
+#: ``project_materialization_service._normalize_rel`` exactly so acquisition
+#: and materialization share the same traversal / reserved-name rejection.
+
+
+def normalize_rel(rel: str) -> str | None:
+    """Normalize a source-relative path; return None when it is unsafe.
+
+    Backslash -> slash; empty and ``.`` segments are dropped; ANY ``..``
+    segment or a NUL byte is a traversal vector and rejects the whole tree
+    (never popped).  This is the shared rule both the acquisition
+    post-checks and the Materialization git-reader call so there is one
+    authoritative path rule, not two contradicting ones.
+    """
+    if not rel or "\x00" in rel:
+        return None
+    parts: list[str] = []
+    for part in rel.replace("\\", "/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    return "/".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import os
+import socket
 import uuid
 import zipfile
 from types import SimpleNamespace
@@ -39,7 +40,10 @@ from app.services.intake_security import (
     check_host_path,
     check_locator_security,
     check_zip_slip,
+    git_url_detail,
     is_terminal_intake_status,
+    is_unsafe_host,
+    normalize_rel,
     path_traversal_detail,
     reason_code_is_retryable,
     scan_locator_for_credentials,
@@ -374,7 +378,78 @@ def test_platform_admin_same_tenant_can_read() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Module surface sanity
+# 8. Git source acquisition security guards (Phase 2B-4, card t_4874c3e7)
+#
+# The three shared, stdlib-only guards the Git acquisition service and the
+# Materialization git-reader MUST call (one authoritative rule set, design
+# GIT_ACQ_DESIGN_V1.md §D): the https-only URL gate, the cross-product SSRF
+# host rule, and the single member-path normalizer.
+# ---------------------------------------------------------------------------
+
+
+def test_git_url_detail_rejects_non_https_schemes() -> None:
+    # file:// / ssh:// / http:// / ftp:// are all unsafe protocols — only
+    # https is a git remote in V1.
+    assert git_url_detail("file:///etc/passwd") is not None
+    assert git_url_detail("ssh://git@github.com/o/r.git") is not None
+    assert git_url_detail("http://github.com/o/r") is not None
+    assert git_url_detail("ftp://github.com/o/r") is not None
+    assert git_url_detail("javascript:alert(1)") is not None
+
+
+def test_git_url_detail_rejects_embedded_userinfo() -> None:
+    # A credential in the URL violates the "token never in the locator /
+    # URL userinfo" invariant (design §A.3) — reject before any process.
+    assert git_url_detail("https://user:pass@github.com/o/r") is not None
+    assert git_url_detail("https://user@github.com/o/r") is not None
+
+
+def test_git_url_detail_rejects_empty_and_non_string() -> None:
+    assert git_url_detail("") is not None
+    assert git_url_detail(None) is not None
+    assert git_url_detail(123) is not None  # type: ignore[arg-type]
+
+
+def test_git_url_detail_delegates_host_to_is_unsafe_host() -> None:
+    # The host decision is owned by is_unsafe_host: a public host passes
+    # (no DNS on IP literals), a private IP literal fails closed.
+    assert is_unsafe_host("https://8.8.8.8/x") is None  # public IP literal
+    assert is_unsafe_host("https://127.0.0.1/x") is not None  # loopback
+    assert is_unsafe_host("https://10.0.0.5/x") is not None  # RFC1918
+    assert is_unsafe_host("https://169.254.169.254/meta") is not None  # link-local / metadata
+    assert is_unsafe_host("https://192.168.1.1/x") is not None
+    assert is_unsafe_host("https://0.0.0.0/x") is not None
+    # userinfo is rejected by the URL gate, and a bare public IP passes.
+    assert git_url_detail("https://8.8.8.8/x") is None
+    assert git_url_detail("https://192.168.0.1/x") is not None
+
+
+def test_is_unsafe_host_fails_closed_on_unresolvable(monkeypatch) -> None:
+    # A hostname that cannot be resolved is UNPROVABLE-safe -> unsafe
+    # (the fail-closed-on-exception rule, design §A.5).  Monkeypatch the
+    # resolver so the test is deterministic and needs no network.
+    def _boom(*_a, **_k):
+        raise socket.gaierror("no such host")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    assert is_unsafe_host("https://does-not-exist.example/") is not None
+
+
+def test_normalize_rel_rejects_traversal_and_reserved() -> None:
+    # The shared normalizer: backslash->slash, drop '.'/empty, and ANY '..'
+    # or NUL rejects the whole path (never popped).  Empty -> None.
+    assert normalize_rel("a/b/c") == "a/b/c"
+    assert normalize_rel("a\\b\\c") == "a/b/c"
+    assert normalize_rel("./a/./b") == "a/b"
+    assert normalize_rel("a/../../x") is None
+    assert normalize_rel("..") is None
+    assert normalize_rel("a\x00b") is None
+    assert normalize_rel("") is None
+    assert normalize_rel(".") is None
+
+
+# ---------------------------------------------------------------------------
+# 9. Module surface sanity
 # ---------------------------------------------------------------------------
 
 
@@ -389,6 +464,9 @@ def test_expected_symbol_names_present() -> None:
         "SecurityVerdict",
         "check_host_path",
         "check_zip_slip",
+        "git_url_detail",
+        "is_unsafe_host",
+        "normalize_rel",
         "scan_locator_for_credentials",
         "transition",
         "verify_tenant_scope",
