@@ -80,7 +80,13 @@ at the entry gate is a **403** (`AnalysisSecurity`, mirroring
 ## 4. Files changed (this build)
 
 - `backend/alembic/versions/v1_11_5_f068_analysis_persistence.py` (NEW,
-  DDL-only, functional `downgrade()`, no inline SELECT→UPDATE loops).
+  DDL-only, no inline SELECT→UPDATE loops). `downgrade()` is functional on
+  BOTH fresh-DB paths (create_all-provisioned and pure-alembic): the redundant
+  `ix_analysis_runs_project_id` was dropped from the migration so its index
+  set stays in lockstep with the model, and every `op.drop_index` in
+  `downgrade()` is existence-guarded (`_existing_indexes`) so it is a clean
+  no-op where 001's `create_all` pre-created the tables from the model
+  metadata. Re-verified in t_bca54821 — see §5 "downgrade/upgrade re-verified".
 - `backend/alembic/env.py` (import the new models into `Base.metadata`).
 - `backend/app/models/analysis.py` (NEW: `AnalysisRun`, `AnalysisFinding`,
   `ProjectKnowledge` + the closed enum value sets).
@@ -120,6 +126,55 @@ from the full 001→f068 chain).
   check .`, `uv run --extra dev pyright app`, the 2B Project/Intake/
   Materialization/GitAcquisition suites, and `uv run alembic upgrade head` on
   a fresh DB.
+- **Downgrade/upgrade re-verified (rework t_bca54821).** After the review
+  t_75dd99db flagged `f068 downgrade()` as hard-failing on fresh DBs
+  (`UndefinedObjectError: index "ix_analysis_runs_project_id" does not
+  exist`), the fix — dropping the redundant `ix_analysis_runs_project_id`
+  from both the model and the migration and existence-guarding every index
+  drop in `downgrade()` — was re-verified on two independently freshly
+  created scratch DBs (`clawith_tbca54821_createall`,
+  `clawith_tbca54821_pure`), each running
+  `uv run alembic upgrade head` → `uv run alembic downgrade
+  f067_intake_rejection_fields` → `uv run alembic upgrade head`:
+
+  ```text
+  $ uv run alembic heads
+  f068_analysis_persistence (head)          # exactly ONE revision
+
+  Path A (create_all-provisioned fresh DB):
+    [upgrade head]                        EXIT=0
+    [downgrade f067_intake_rejection_fields] EXIT=0
+    [upgrade head (2nd)]                  EXIT=0
+
+  Path B (pure-alembic fresh DB):
+    [upgrade head]                        EXIT=0
+    [downgrade f067_intake_rejection_fields] EXIT=0
+    [upgrade head (2nd)]                  EXIT=0
+
+  Post-upgrade pg_indexes on both paths (identical):
+    analysis_runs:     analysis_runs_pkey, ix_analysis_runs_revision_sha,
+                       ix_analysis_runs_tenant_id, uq_analysis_runs_project_revision
+    analysis_findings: analysis_findings_pkey,
+                       ix_analysis_findings_analysis_run_id,
+                       ix_analysis_findings_tenant_id
+    project_knowledge: project_knowledge_pkey,
+                       ix_project_knowledge_project_id,
+                       ix_project_knowledge_subject,
+                       ix_project_knowledge_tenant_id
+    uq_analysis_runs_project_revision: UNIQUE (project_id, revision_sha)
+    => index sets AGREE between paths: True
+  ```
+
+  Full machine-captured output of this cycle is in the block above (each step's
+  exit status + the post-upgrade `pg_indexes` set). Repro: drop + recreate the
+  two scratch DBs and run the three-step alembic cycle with `DATABASE_URL`
+  pointed at each — Path A starts from the empty DB (001's `create_all`
+  provisions it), Path B provisions to `f067` first, then `DROP TABLE`/
+  `DROP TYPE` the three analysis objects so f068's own DDL must recreate them.
+  The criterion #14 analysis E2E was re-run on this rework tree against the
+  migrated fresh scratch DB: `tests/test_project_analysis_e2e_acceptance.py`
+  → **6 passed** (PYTEST_EXIT=0, clean solo run), confirming the fix
+  regressed nothing on the execution path.
 
 ## 6. Baseline tooling debt (recorded honestly, not fake-passed)
 

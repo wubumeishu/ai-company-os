@@ -64,7 +64,7 @@ CATEGORY_VALUES = ["SECURITY", "RISK", "TECH_DEBT", "OPEN_QUESTION", "FACT"]
 TAG_VALUES = ["FACT", "OBSERVATION", "INFERENCE", "UNKNOWN"]
 KNOWLEDGE_STATUS_VALUES = ["PROPOSED", "CONFIRMED", "SUPERSEDED"]
 
-RUNS_INDEXES = ("ix_analysis_runs_revision_sha", "ix_analysis_runs_tenant_id", "ix_analysis_runs_project_id")
+RUNS_INDEXES = ("ix_analysis_runs_revision_sha", "ix_analysis_runs_tenant_id")
 FINDINGS_INDEXES = ("ix_analysis_findings_analysis_run_id", "ix_analysis_findings_tenant_id")
 KNOWLEDGE_INDEXES = ("ix_project_knowledge_project_id", "ix_project_knowledge_subject", "ix_project_knowledge_tenant_id")
 
@@ -77,6 +77,19 @@ def _enum_values(values: list[str]) -> str:
 def _existing_tables(bind: sa.engine.Connection) -> set[str]:
     """Table names present in the current schema."""
     return {str(name) for name in sa.inspect(bind).get_table_names()}
+
+
+def _existing_indexes(bind: sa.engine.Connection, table_name: str) -> set[str]:
+    """Index names present on ``table_name``.
+
+    Empty set when the table itself is absent (nothing to reflect against),
+    so a guarded ``op.drop_index`` is a no-op for a table that was never
+    created (the create_all-provisioned fresh-DB path, where ``downgrade``
+    may run on a table whose indexes the migration never produced).
+    """
+    if table_name not in _existing_tables(bind):
+        return set()
+    return {str(name) for name in sa.inspect(bind).get_indexes(table_name)}
 
 
 def _present_enum_types(bind: sa.engine.Connection) -> set[str]:
@@ -142,7 +155,13 @@ def _create_analysis_runs(conn: sa.engine.Connection) -> None:
     )
     op.create_index("ix_analysis_runs_revision_sha", ANALYSIS_RUNS_TABLE, ["revision_sha"])
     op.create_index("ix_analysis_runs_tenant_id", ANALYSIS_RUNS_TABLE, ["tenant_id"])
-    op.create_index("ix_analysis_runs_project_id", ANALYSIS_RUNS_TABLE, ["project_id"])
+    # NOTE: no standalone ix_analysis_runs_project_id. Project-keyed reads are
+    # covered by the project_id-leading btree of uq_analysis_runs_project_revision
+    # (UNIQUE(project_id, revision_sha)), matching the model, whose
+    # AnalysisRun.project_id carries no index=True. A redundant standalone
+    # index would also never exist on create_all-provisioned fresh DBs (001
+    # pre-creates the table from the model metadata), so downgrade() would
+    # have to DROP an index that was never created.
 
 
 def _create_analysis_findings(conn: sa.engine.Connection) -> None:
@@ -244,17 +263,27 @@ def downgrade() -> None:
     present_types = _present_enum_types(conn)
 
     # Drop in dependency order: findings (CASCADE child) -> knowledge -> runs.
+    # Each index drop is guarded against the index actually existing (mirrors
+    # the _existing_tables guard above), so downgrade is a clean no-op on the
+    # create_all-provisioned fresh-DB path, where 001 pre-created the tables
+    # from the model metadata and this migration's create_index never ran.
     if PROJECT_KNOWLEDGE_TABLE in tables:
+        knowledge_indexes = _existing_indexes(conn, PROJECT_KNOWLEDGE_TABLE)
         for index_name in KNOWLEDGE_INDEXES:
-            op.drop_index(index_name, table_name=PROJECT_KNOWLEDGE_TABLE)
+            if index_name in knowledge_indexes:
+                op.drop_index(index_name, table_name=PROJECT_KNOWLEDGE_TABLE)
         op.drop_table(PROJECT_KNOWLEDGE_TABLE)
     if ANALYSIS_FINDINGS_TABLE in tables:
+        findings_indexes = _existing_indexes(conn, ANALYSIS_FINDINGS_TABLE)
         for index_name in FINDINGS_INDEXES:
-            op.drop_index(index_name, table_name=ANALYSIS_FINDINGS_TABLE)
+            if index_name in findings_indexes:
+                op.drop_index(index_name, table_name=ANALYSIS_FINDINGS_TABLE)
         op.drop_table(ANALYSIS_FINDINGS_TABLE)
     if ANALYSIS_RUNS_TABLE in tables:
+        runs_indexes = _existing_indexes(conn, ANALYSIS_RUNS_TABLE)
         for index_name in RUNS_INDEXES:
-            op.drop_index(index_name, table_name=ANALYSIS_RUNS_TABLE)
+            if index_name in runs_indexes:
+                op.drop_index(index_name, table_name=ANALYSIS_RUNS_TABLE)
         op.drop_table(ANALYSIS_RUNS_TABLE)
 
     # Drop an enum type only when no table column still references it.

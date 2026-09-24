@@ -99,6 +99,13 @@ class AnalysisRun(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Deliberately NOT index=True: project-keyed reads ("all runs for project
+    # P") are served by the project_id-leading btree that backs the
+    # UNIQUE(project_id, revision_sha) invariant below. A standalone
+    # ix_analysis_runs_project_id would be a redundant second btree on the
+    # same leading column. Keeping the model's index set (revision_sha,
+    # tenant_id) in lockstep with the f068 migration is what lets 001's
+    # create_all and the migration's create_index agree on a fresh DB.
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
