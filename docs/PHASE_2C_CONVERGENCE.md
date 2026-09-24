@@ -58,14 +58,53 @@ t_2a41d49c; A–S sections; not re-archived here — see §Gap).
   execute project code (E2E asserts zero downstream execution).
 - Tenant scoping via `TenantScopedBaseDAO` + `verify_tenant_scope`.
 
+### 3.1 Scope Definition A/B (formal, 2026-09-25 Final Gate)
+
+The 2C constraint and the 2C implementation are NOT contradictory; they govern
+two different subjects. This definition is formal so future audits do not
+re-derive it:
+
+- **A. Subject of the phase = the analyzed target Project. Strictly read-only,
+  target code NEVER executed.** The analysis execution path is static-only
+  (Stage 11): it reads DB rows + the bounded `locator` JSON written back by
+  acquisition, and stops there. Source of record
+  (`backend/app/services/analysis_service.py` module docstring, on main):
+  "Stage 11 (hard): this path is STATIC-ONLY. It reads DB rows and the bounded
+  locator JSON written by acquisition; it NEVER executes the target project's
+  code (no subprocess, no interpreter, no build, no pip/npm install, no
+  service start). Dynamic analysis is deferred to a future
+  Execution/Analysis sandbox." The E2E additionally asserts zero downstream
+  execution (`sessions`/`tasks`/`schedules` all empty at
+  `tests/test_project_analysis_e2e_acceptance.py`). Verified 2026-09-25 on
+  main @ `522df379`.
+- **B. Subject = AI Company OS itself. The phase MAY add its own subsystem
+  code.** Everything 2C landed (`analysis_runs` / `analysis_findings` /
+  `project_knowledge` models + DAO + schemas + service + API routes + the
+  DDL-only migration `f068_analysis_persistence` + the E2E suite) is Company
+  OS's own Analysis subsystem implementing the capability, NOT target-project
+  code, and NOT executed target code. It is new business code OF the platform.
+
+**Canonical wording:** "Phase 2C analysis is read-only and non-executing with
+respect to the ANALYZED target project (Stage 11 static-only, target code is
+never run); the same phase is permitted to add the Company OS's own Analysis
+subsystem code (persistence, DAO, service, API, migration, tests) to make the
+capability exist."
+
 ## 4. Evidence Battery (from t_2a41d49c closeout, run on merged main tree)
+
+> **2026-09-25 Final Gate re-verification:** every row below was RE-RUN on the
+> merged main tree @ `522df379` (checkouts on main, not the stale worktree), on
+> a FRESH scratch DB `clawith_2c_finalgate` (Postgres 5432, PostgreSQL 16).
+> Results are identical to the original report; numbers below carry the
+> re-verification. The original t_2a41d49c run used scratch DB
+> `clawith_t2a41d49c_land` — both remain in place, harmless.
 
 | Gate | Result |
 |---|---|
 | 2B DB-free regression (git-acq service+security, intake, materialization) | **263 passed**, 3 deselected |
 | 2B-1 migration regression | **15 passed** |
-| Real-DB transport E2E (fresh f068 DB `clawith_t2a41d49c_land`) | **39 passed** |
-| 2C analysis E2E (real local git repo; Project → Source → Revision → Analysis → Findings → Stored → Knowledge) | **6/6 passed** |
+| Real-DB transport E2E (fresh f068 DB; re-verified on `clawith_2c_finalgate`) | **39 passed** |
+| 2C analysis E2E (real local git repo; Project → Source → Revision → Analysis → Findings → Stored → Knowledge; re-verified on `clawith_2c_finalgate`) | **6/6 passed** |
 | Alembic single head + fresh-DB chain `001 → f068` | exactly 1 head; EXIT=0 |
 | ruff on 2C-touched files | 0 new errors (`api/projects.py` B008 x24 = pre-existing FastAPI Depends() baseline family, 14→24, same rule) |
 | pyright on 5 changed app files | 0 errors, 0 warnings |
@@ -83,14 +122,33 @@ over `git_acquisition_service.py` / `intake_security.py` /
 Re-run on a clean-egress host:
 `pytest tests/test_git_acquisition_service.py -k "remote_url_gate or e2e_github or e2e_gitlab"`.
 
-## 5. Known Boundaries & TODOs
+## 5. Known Boundaries & TODOs (classified at 2026-09-25 Final Gate)
 
-- Confirmation UI for `project_knowledge` promotion does not exist yet —
-  promote was exercised as a direct API call; the human gate is inert by design (OQ-6).
-- DAO read paths default `limit=100`; >100-row projects need pagination (no current consumer).
-- Tree-wide legacy static debt (~3107 ruff / ~713 pyright) is pre-existing; every 2C-touched file is 0-error.
-- Remote-egress E2E re-run pending a clean-egress host (§4 limitation).
-- Next phase starts at Task Decomposition / Squad / Agent Assignment — 2C explicitly STOPs here.
+**Blocker:** NONE. Nothing below prevents 2C from serving as the Phase 2D
+(Task Decomposition) baseline.
+
+**Non-blocker TODO:**
+- `.worktrees/` stale worktrees from earlier phases + `+`-only stale branches
+  + untracked `.smoke-backup/` — verified content-free via `git cherry`
+  (zero `^-` commits on any unmerged branch); hygiene only, deliberately
+  untouched per owner instruction at this gate.
+- Scratch PG DBs `clawith_t2a41d49c_land` + `clawith_2c_finalgate` left in
+  place (harmless, `clawith` role; cleanup is future hygiene, not a gate).
+- Remote-egress E2E re-run (`remote_url_gate` / `e2e_github` / `e2e_gitlab`)
+  deferred to a clean-egress host (§4 environment limitation).
+- DAO read paths default `limit=100`; >100-row projects need pagination
+  (no current consumer).
+
+**Future Enhancement (explicitly out of 2C scope):**
+- Confirmation UI for `project_knowledge` promotion — PENDING_CONFIRMATION
+  is inert by design (OQ-6); promote was exercised as a direct API call.
+- Dynamic/execution analysis (sandbox) — Stage 11 deferred it; 2C is
+  static-only by design.
+- Tree-wide legacy static debt (~3107 ruff / ~713 pyright) is pre-existing;
+  every 2C-touched file is 0-error (re-verified this gate).
+
+- Next phase starts at Task Decomposition / Squad / Agent Assignment — 2C
+  explicitly STOPs here.
 
 ## 6. Closeout Hygiene (repo state at report time)
 
@@ -101,8 +159,8 @@ Re-run on a clean-egress host:
   `.smoke-backup/`, and `+`-only stale branches remain in the main repo
   (verified content-free via `git cherry`); plus the `t_bca54821` rework-lane
   worktree/branch (fully merged, left by its lane).
-- The land closeout doc `PHASE_2C_LAND_CLOSEOUT_T2A41D49C.md` lives in
-  `.worktrees/t_2a41d49c/` and NOT in main `docs/` — archive it if you want
-  the A–S original kept on main.
+- The land closeout doc `PHASE_2C_LAND_CLOSEOUT_T2A41D49C.md` was archived
+  into main `docs/` at `522df379` (2026-09-25), alongside this convergence
+  report; the original worktree copy is historical.
 - Scratch PG DB `clawith_t2a41d49c_land` left in place (consistent with prior
   scratch DBs; harmless, `clawith` role).
