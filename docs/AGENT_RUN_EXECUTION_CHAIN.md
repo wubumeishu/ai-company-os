@@ -38,7 +38,7 @@ Real entry points are ingress adapters that produce durable commands:
 | Ingress | Path | Function |
 |---|---|---|
 | Web chat (primary) | `backend/app/api/websocket.py:231` | `websocket_chat` -> `message_loop` (:512) -> `_accept_client_message` (:685) -> `_enqueue_runtime_chat` (:851) -> `_attach_runtime_run` (:594) |
-| Task execution | `backend/app/services/task_executor.py:43` | `enqueue_task_runtime()` builds `StartRunCommand(source_type="task", source_execution_id=f"task:{task.id}", run_kind="background")` |
+| Task execution | `backend/app/services/task_executor.py:43` | `enqueue_task_runtime()` builds `StartRunCommand(source_type="task", source_execution_id=f"task:{task.id}", run_kind="background")` — **superseded by Phase 2E**: the Execute path now routes through `TaskExecutionService` (`app/services/task_execution_service.py`, gate P1–P8 + R1–R5 attempt keying; see `docs/PHASE_2E_AGENT_ASSIGNMENT_SPEC_V1.md` §2/§4/§5); the legacy auto-enqueue/trigger paths still call `enqueue_task_runtime` directly with `attempt_id=None` (byte-identical stable key) |
 | Channel bots (feishu/slack/dingtalk/wecom/teams/whatsapp/webhooks) | `backend/app/api/*.py` | each calls `enqueue_chat_runtime(...)` with its `source_channel` |
 | Triggers / heartbeat / A2A | `backend/app/services/trigger_runtime/`, `a2a_runtime.py` | enqueue through `RuntimeCommandIntake` |
 
@@ -221,6 +221,15 @@ ingress adapters -> durable command inbox -> advisory-locked worker ->
 LangGraph (compact/model/tool/verify/wait/terminal) -> provider-abstract
 model calls -> leased, settled tool executions -> checkpoint-committed
 events + terminal handlers -> channel delivery.
+
+Phase 2E (Agent Assignment & Execution Semantics V1) adds ONE owning
+service on the Task ingress — `TaskExecutionService`
+(`backend/app/services/task_execution_service.py`,
+`docs/PHASE_2E_AGENT_ASSIGNMENT_SPEC_V1.md`): the fail-closed P1–P8 gate,
+R1–R5 idempotency/attempt keying, the §6.2 derived-state projection, and
+the intake-boundary AuditLog. Everything from `enqueue_task_runtime`
+downward is untouched; legacy auto-enqueue/trigger call sites keep
+`attempt_id=None` / `actor_user_id=None` (byte-identical behavior).
 
 Broken/missing (outside the main spine, for the Phase 1 report):
 - Untyped legacy tool handlers: rejected, not executed (by design,

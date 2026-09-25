@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dao.base import TenantScopedBaseDAO
-from app.models.task import Task, TaskDependency
+from app.models.task import Task, TaskDependency, TaskLog
 
 
 class TaskDependencyDAO(TenantScopedBaseDAO[TaskDependency]):
@@ -239,6 +240,33 @@ class TaskProvenanceDAO(TenantScopedBaseDAO[Task]):
 
     def __init__(self) -> None:
         super().__init__(Task)
+
+    async def latest_task_logs(
+        self,
+        task_id: uuid.UUID,
+        *,
+        since: datetime | None = None,
+        limit: int = 5,
+        db: AsyncSession | None = None,
+    ) -> Sequence[TaskLog]:
+        """The newest bounded set of TaskLog lines for one task.
+
+        Phase 2E §10.2: the query endpoint's ``result_summary`` reuses the
+        latest settlement TaskLog line (root §十五: no new Artifact system —
+        "reuse Run result / TaskLog / revisions").  Bounded by ``limit``;
+        TaskLog has no tenant column, so the Task-row scope (``task_id``
+        FK + the caller's tenant-scoped task load) is the isolation seam.
+        """
+        stmt = (
+            select(TaskLog)
+            .where(TaskLog.task_id == task_id)
+            .order_by(TaskLog.created_at.desc())
+            .limit(limit)
+        )
+        if since is not None:
+            stmt = stmt.where(TaskLog.created_at >= since)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalars().all()
 
     async def create_with_provenance(
         self,
