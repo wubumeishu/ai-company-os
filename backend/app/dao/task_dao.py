@@ -135,6 +135,65 @@ class TaskDependencyDAO(TenantScopedBaseDAO[TaskDependency]):
             await db.refresh(edge, attribute_names=["created_at", "updated_at"])
         return list(edges)
 
+    async def list_edges_for(
+        self,
+        task_ids: Sequence[uuid.UUID],
+        *,
+        db: AsyncSession | None = None,
+        limit: int = 200,
+    ) -> Sequence[TaskDependency]:
+        """All direct edges OUT of a bounded set of tasks in one read (no N+1).
+
+        The batched edge half of the §5.3 ready/blocked derivation: given a
+        set of tasks, return every dependency edge they own so the owning
+        service can batch-load the dependency statuses.  Empty input returns
+        an empty list (no query issued).  Bounded by ``limit``.
+        """
+        if not task_ids:
+            return []
+        tenant_id = self._require_tenant_id()
+        stmt = (
+            select(TaskDependency)
+            .where(TaskDependency.task_id.in_(list(task_ids)))
+            .order_by(TaskDependency.created_at.asc())
+            .limit(limit)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(TaskDependency.tenant_id == tenant_id)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalars().all()
+
+    async def project_dependency_edges(
+        self,
+        project_id: uuid.UUID,
+        *,
+        db: AsyncSession | None = None,
+        limit: int = 1000,
+    ) -> Sequence[TaskDependency]:
+        """The bounded subgraph of edges owned by one project (one JOIN read).
+
+        The §5.2 cycle check needs the candidate task's whole-project edge set
+        in a single bounded read (design: "项目级图远小于全表", never an
+        unbounded tenant-wide topology).  Design §3.1 guarantees every edge has
+        both ends in the same project, so joining the edge's dependee
+        (``task_id``) onto ``tasks.project_id`` captures the entire project
+        subgraph.  Empty / cross-project reads return an empty list.
+        """
+        from app.models.task import Task
+
+        tenant_id = self._require_tenant_id()
+        stmt = (
+            select(TaskDependency)
+            .join(Task, Task.id == TaskDependency.task_id)
+            .where(Task.project_id == project_id)
+            .order_by(TaskDependency.created_at.asc())
+            .limit(limit)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(TaskDependency.tenant_id == tenant_id)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalars().all()
+
     async def remove_dependency(
         self,
         task_id: uuid.UUID,
@@ -206,6 +265,47 @@ class TaskProvenanceDAO(TenantScopedBaseDAO[Task]):
         # greenlet refresh (f068 analysis_dao precedent).
         await db.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
+
+    async def converted_finding_ids(
+        self,
+        analysis_run_id: uuid.UUID,
+        *,
+        db: AsyncSession | None = None,
+        limit: int = 200,
+    ) -> set[uuid.UUID]:
+        """The set of ``finding_id``s already converted into Tasks for one run.
+
+        The bounded dedup pre-check of the Analysis→Task mapping lane
+        (PHASE_2D_ANALYSIS_TASK_MAPPING.md §4): a finding may be converted once
+        per run.  One read returns every finding of this run that already has a
+        converted Task, so the owning service skips it as ``skipped_duplicate``
+        instead of re-creating.  The last-resort guard is the f070
+        ``UNIQUE(analysis_run_id, finding_id)`` constraint on a racing write.
+        Empty when the run has no converted Tasks (a normal first invocation).
+        """
+        tenant_id = self._require_tenant_id()
+        stmt = (
+            select(Task.finding_id)
+            .where(
+                Task.analysis_run_id == analysis_run_id,
+                Task.finding_id.isnot(None),
+                Task.created_reason == "ANALYSIS_FINDING",
+            )
+            .limit(limit)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(Task.tenant_id == tenant_id)
+        async with self.session(db=db, readonly=True) as session_db:
+            rows = (await session_db.execute(stmt)).all()
+        # The WHERE clause already excludes NULL finding_id rows; drop any None
+        # defensively so the returned set is a clean set[uuid.UUID] (the owner
+        # uses it to skip already-converted findings — spec §4).
+        result: set[uuid.UUID] = set()
+        for row in rows:
+            finding_id = row[0]
+            if finding_id is not None:
+                result.add(finding_id)
+        return result
 
     async def task_status_map(
         self,

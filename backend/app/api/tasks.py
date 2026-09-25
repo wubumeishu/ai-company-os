@@ -93,22 +93,43 @@ async def create_task(
     await query_dao.flush(db)
 
     runtime_handle = None
+    blocked_unmet: list[uuid.UUID] = []
     if data.type == "todo":
-        from app.services.task_executor import enqueue_task_runtime
+        from app.services.task_executor import TaskBlockedError, enqueue_task_runtime
 
-        runtime_handle = await enqueue_task_runtime(
-            db,
-            task=task,
-            agent=agent,
-        )
+        try:
+            runtime_handle = await enqueue_task_runtime(
+                db,
+                task=task,
+                agent=agent,
+            )
+        except TaskBlockedError as blocked:
+            # Dependency gate (design §5.4): a todo task whose dependencies are
+            # not all done is not enqueued.  A freshly-created task has no
+            # edges yet, so this is a defensive fail-closed branch — but it keeps
+            # the auto-enqueue call point honest: the task stays pending and no
+            # Run is created rather than the POST surfacing a 500.
+            blocked_unmet = blocked.reason
+            db.add(
+                TaskLog(
+                    task_id=task.id,
+                    content=(
+                        "⛔ 依赖未满足，暂不可执行：未 done 前置 = ["
+                        + ", ".join(str(x) for x in blocked_unmet)
+                        + "]"
+                    ),
+                )
+            )
+            await query_dao.flush(db)
 
     task_out = await _enrich_task_out(task, db)
 
     # Commit so the background executor can see the task in its own session
     await query_dao.commit(db)
 
-    # Fire background execution for todo tasks
-    if data.type == "todo" and runtime_handle is None:
+    # Fire background execution for todo tasks — but never for a task the
+    # dependency gate blocked (it stays pending for a human to resolve / re-trigger).
+    if data.type == "todo" and runtime_handle is None and not blocked_unmet:
         import asyncio
         from app.services.task_executor import execute_task
         asyncio.create_task(execute_task(task.id, agent_id))

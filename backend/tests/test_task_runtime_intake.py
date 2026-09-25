@@ -18,12 +18,36 @@ from app.services.task_executor import (
 )
 
 
+class _EmptyResult:
+    """Minimal AsyncSession result: every read returns empty (no dependencies).
+
+    Supports the surface the Phase 2D execution gate reads via the task DAOs
+    (``list_dependencies`` -> ``.scalars().all()`` and ``task_status_map`` ->
+    ``.all()``), so a task with no dependency edges is correctly seen as ready.
+    """
+
+    def all(self) -> list:
+        return []
+
+    def scalars(self) -> _EmptyResult:
+        return self
+
+    def first(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+
 class _Session:
     def __init__(self) -> None:
         self.added: list[object] = []
 
     def add(self, value: object) -> None:
         self.added.append(value)
+
+    async def execute(self, _stmt) -> _EmptyResult:
+        return _EmptyResult()
 
 
 def _settings(*, enabled: bool) -> Settings:

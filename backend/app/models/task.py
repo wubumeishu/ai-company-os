@@ -123,6 +123,17 @@ class Task(Base):
     creator: Mapped["User"] = relationship("User", foreign_keys=[created_by])
     logs: Mapped[list["TaskLog"]] = relationship(back_populates="task", cascade="all, delete-orphan")
 
+    # Phase 2D Analysis->Task dedup invariant (PHASE_2D_ANALYSIS_TASK_MAPPING.md
+    # §4, f070): a finding may be converted into a Task ONCE per analysis run.
+    # Named + plain (not a partial WHERE-finding_id-not-null index, which the
+    # model cannot express — the f068 index-lockstep lesson) so create_all and
+    # the f070 migration agree on a fresh vs an existing DB.  PostgreSQL treats
+    # NULL as distinct, so many MANUAL rows (finding_id IS NULL) coexist
+    # freely; only two rows of the same (analysis_run_id, finding_id) collide.
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "finding_id", name="uq_tasks_analysis_finding"),
+    )
+
 
 class TaskDependency(Base):
     """One directed edge of the V1 Task Graph: ``task_id`` depends on

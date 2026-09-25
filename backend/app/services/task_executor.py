@@ -14,6 +14,7 @@ from app.models.task import Task, TaskLog
 from app.services.agent_runtime.adapter import RuntimeCommandIntake
 from app.services.agent_runtime.config import decide_runtime_v2
 from app.services.agent_runtime.contracts import RunHandle, StartRunCommand
+from app.services.task_graph_service import TaskBlockedError, task_graph_service
 
 settings = get_settings()
 
@@ -84,6 +85,19 @@ async def enqueue_task_runtime(
         source_execution_id = f"task:{task.id}:supervision:{occurrence_id}"
     else:
         source_execution_id = f"task:{task.id}"
+
+    # Phase 2D execution gate (design §5.4): before creating a Run, refuse to
+    # enqueue a dependency-blocked todo task.  A todo task whose direct
+    # dependencies are not all ``done`` is BLOCKED -> raise TaskBlockedError so
+    # the caller keeps it ``pending`` + logs the block and creates no Run.  A
+    # ready task (no unmet deps) proceeds unchanged.  Supervision carries no
+    # dependency edges, so the gate returns empty for it (no behavior change).
+    # agent.tenant_id is already narrowed to non-None by the gate above.
+    if task.type == "todo":
+        gate_tenant: uuid.UUID = agent.tenant_id
+        unmet = await task_graph_service.ensure_ready(db, task=task, tenant_id=gate_tenant)
+        if unmet:
+            raise TaskBlockedError(task.id, unmet)
 
     handle = await RuntimeCommandIntake(
         db,
@@ -172,6 +186,13 @@ async def execute_task(task_id: uuid.UUID, agent_id: uuid.UUID) -> None:
             agent_id,
             execution_id=uuid.uuid4(),
         )
+    except TaskBlockedError as blocked:
+        # Dependency gate (design §5.4): the task has unmet direct
+        # dependencies, so NO Run is created and it stays pending.  This is a
+        # legitimate outcome (not a failure) — log the block notice, not an
+        # error, and let the human resolve / re-trigger.
+        await _log_blocked(task_id, blocked.reason)
+        return
     except TaskRuntimeIntakeError as exc:
         if exc.code == "task_not_found":
             logger.warning(f"[TaskExec] Task {task_id} not found")
@@ -200,4 +221,16 @@ async def _log_error(task_id: uuid.UUID, message: str) -> None:
     logger.error(f"[TaskExec] Error for {task_id}: {message}")
     async with async_session() as db:
         db.add(TaskLog(task_id=task_id, content=f"❌ {message}"))
+        await db.commit()
+
+
+async def _log_blocked(task_id: uuid.UUID, unmet: list[uuid.UUID]) -> None:
+    """Record a dependency-blocked trigger (design §5.4): the task stays
+    ``pending`` and NO Run is created.  The human resolves the unmet
+    dependencies (or removes the edges) and re-triggers.
+    """
+    detail = ", ".join(str(x) for x in unmet)
+    logger.info(f"[TaskExec] Task {task_id} not enqueued — blocked by unmet deps [{detail}]")
+    async with async_session() as db:
+        db.add(TaskLog(task_id=task_id, content=f"⛔ 依赖未满足，暂不可执行：未 done 前置 = [{detail}]"))
         await db.commit()
