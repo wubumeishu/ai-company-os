@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator
 
+from app.models.task import TASK_CREATED_REASONS
 from app.services.timezone_utils import validate_timezone_name
 
 # ─── Auth ───────────────────────────────────────────────
@@ -361,7 +362,13 @@ class TaskCreate(BaseModel):
     analysis_run_id: uuid.UUID | None = None
     finding_id: uuid.UUID | None = None
     revision_sha: str | None = Field(default=None, max_length=64)
-    created_reason: str | None = None  # None -> MANUAL (server default)
+    # Closed 3-value set (design §4.1, f069 enum).  ``None`` (the common manual
+    # path) is accepted and server-defaults to MANUAL; any other value must be
+    # one of the closed reasons — free text is rejected at the transport.
+    # The §4.2 cross-table consistency (MANUAL ⇒ all analysis cols NULL;
+    # ANALYSIS_* ⇒ consistent run/finding/revision) is enforced fail-closed by
+    # the owning service before any row is written (D2, Final-Gate gate #2).
+    created_reason: str | None = Field(default=None, pattern=rf"^(?:{'|'.join(TASK_CREATED_REASONS)})$")
 
 
 class TaskOut(BaseModel):
@@ -405,7 +412,11 @@ class TaskUpdate(BaseModel):
     analysis_run_id: uuid.UUID | None = None
     finding_id: uuid.UUID | None = None
     revision_sha: str | None = None
-    created_reason: str | None = None
+    # Closed 3-value set (design §4.1): one of the reasons, or None = "unset"
+    # (PATCH semantics).  Free text is rejected at the transport; §4.2
+    # consistency of the resulting row is enforced fail-closed by the owning
+    # service (D2).
+    created_reason: str | None = Field(default=None, pattern=rf"^(?:{'|'.join(TASK_CREATED_REASONS)})$")
 
 
 class TaskLogCreate(BaseModel):

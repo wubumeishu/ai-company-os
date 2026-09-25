@@ -692,3 +692,76 @@ async def test_execution_gate_blocks_task_with_unmet_dependency(db) -> None:
                 assert result is handle
                 assert start_run.await_count == 1, "a ready task must start exactly one Run"
                 await sess.rollback()
+
+
+@LIVE
+async def test_r1_concurrent_inverse_edges_at_most_one_no_cycle(db) -> None:
+    """Design §11 R1 / §8: two sessions concurrently insert inverse edges
+    (``A->B`` and ``B->A``) into one project.  The §5.2 reachability check is a
+    read-then-write over the project edge set; without a serialization point,
+    under Postgres READ COMMITTED both writers read the pre-commit edge set,
+    both pass the check, and both commit a 2-cycle that ``UNIQUE(self-pair)``
+    + the self ``CHECK`` cannot catch.  The project-scoped advisory lock
+    (``_lock_project_graph``) closes the window: the second writer blocks on
+    the lock until the first commits, then re-reads the committed edge and is
+    refused.  At most one edge lands and no cycle exists afterward."""
+    import asyncio
+
+    from sqlalchemy import select
+
+    from app.dao import task_dependency_dao
+    from app.dao.base import tenant_context
+
+    await _seed(db)
+    tenant = _SEED.tenant.id
+
+    # Two fresh, project-scoped todo tasks (unique per run -> re-runnable).
+    suffix = uuid.uuid4().hex[:8]
+    a = Task(agent_id=_SEED.agent.id, created_by=_SEED.user.id, tenant_id=tenant,
+             project_id=_SEED.project.id, title=f"r1-a-{suffix}", status="pending")
+    b = Task(agent_id=_SEED.agent.id, created_by=_SEED.user.id, tenant_id=tenant,
+             project_id=_SEED.project.id, title=f"r1-b-{suffix}", status="pending")
+    async with db() as sess:
+        async with sess.begin():
+            with tenant_context(tenant):
+                sess.add_all([a, b])
+                await sess.flush()
+
+    async def insert_edge(from_id: uuid.UUID, to_id: uuid.UUID):
+        """``from_id depends on to_id`` in its OWN session + transaction."""
+        async with db() as s:
+            async with s.begin():
+                with tenant_context(tenant):
+                    return await task_graph_service.add_edge(
+                        s, task_id=from_id, depends_on_task_id=to_id, tenant_id=tenant
+                    )
+
+    # Fire both inverse inserts concurrently.  The advisory lock serializes the
+    # check+write window; the loser re-reads the committed edge and is refused.
+    results = await asyncio.gather(
+        insert_edge(a.id, b.id),  # a depends on b
+        insert_edge(b.id, a.id),  # b depends on a
+    )
+    added = [r for r in results if r.state == "added"]
+    blocked = [r for r in results if r.state == "blocked"]
+    assert len(added) == 1 and len(blocked) == 1, [r.state for r in results]
+    # The loser is refused specifically as a CYCLE (the lock made it see the
+    # winner's committed edge), not some unrelated rejection.
+    assert blocked[0].code == "GRAPH_CYCLE", blocked[0].code
+
+    # No 2-cycle: the two endpoints are NOT mutually dependent.  Read the
+    # committed edge set fresh in a new session.
+    async with db() as s:
+        with tenant_context(tenant):
+            ab = await task_dependency_dao.list_dependencies(a.id, db=s)
+            ba = await task_dependency_dao.list_dependencies(b.id, db=s)
+            a_to_b = any(e.depends_on_task_id == b.id for e in ab)
+            b_to_a = any(e.depends_on_task_id == a.id for e in ba)
+            n_edges = (await s.execute(
+                select(task_dependency_dao.model.id).where(
+                    task_dependency_dao.model.task_id.in_([a.id, b.id]),
+                    task_dependency_dao.model.depends_on_task_id.in_([a.id, b.id]),
+                )
+            )).all()
+    assert not (a_to_b and b_to_a), "R1 violated: a 2-cycle was committed"
+    assert len(n_edges) == 1, f"expected exactly one committed edge, got {len(n_edges)}"

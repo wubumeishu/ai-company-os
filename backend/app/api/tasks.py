@@ -111,6 +111,33 @@ async def create_task(
         revision_sha=data.revision_sha,
         created_reason=data.created_reason or "MANUAL",
     )
+    # D2 / Final-Gate gate #2 (design §4.2 "落库前 fail closed"): when the
+    # caller touches ANY provenance field, the resulting row must satisfy the
+    # §4.2 cross-table integrity rules before it is written.  The validator
+    # (``provenance_consistency``) is the shipped, unit-tested owner of those
+    # rules; it enforces MANUAL ⇒ all analysis cols NULL, and ANALYSIS_* ⇒
+    # a consistent, tenant-aligned run/finding/revision.  On violation: 400,
+    # NOTHING is written (fail closed).  The pure-manual path (no provenance
+    # fields) is byte-identical to before — the MANUAL branch is in-memory, so
+    # no extra query is issued for it.
+    if any(
+        (
+            data.created_reason,
+            data.project_id,
+            data.analysis_run_id,
+            data.finding_id,
+            data.revision_sha,
+        )
+    ):
+        consistent = await task_provenance_dao.provenance_consistency(task, db=db)
+        if not consistent:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "PROVENANCE_INCONSISTENT",
+                    "message": "provenance fields are not mutually consistent (§4.2); nothing was written",
+                },
+            )
     query_dao.add(db, task)
     await query_dao.flush(db)
 
@@ -174,7 +201,40 @@ async def update_task(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    updates = data.model_dump(exclude_unset=True)
+    # D2 / Final-Gate gate #2 (design §4.2 "落库前 fail closed"): when the patch
+    # touches ANY of the five provenance fields, the resulting row must satisfy
+    # the §4.2 cross-table integrity rules BEFORE the managed row is mutated.
+    # We build the merged values on a DETACHED probe Task (never added to the
+    # session) so the validator's internal SELECT cannot trigger an autoflush
+    # of the forged UPDATE — a partial patch that breaks an otherwise-consistent
+    # ANALYSIS_* row, or that forges a provenance set the run/finding/revision
+    # do not back, is refused with 400 and NOTHING is written.  Only on a pass
+    # do we apply the changes to the managed row (the single authoritative write).
+    _PROVENANCE_FIELDS = ("project_id", "analysis_run_id", "finding_id", "revision_sha", "created_reason")
+    if any(f in updates for f in _PROVENANCE_FIELDS):
+        # ``exclude_unset=True`` means a key is present IFF the patch set it;
+        # merge with ``.get()`` so an unset column keeps its managed value.
+        probe = Task(
+            agent_id=task.agent_id,
+            created_by=task.created_by,
+            tenant_id=task.tenant_id,
+            project_id=updates.get("project_id", task.project_id),
+            analysis_run_id=updates.get("analysis_run_id", task.analysis_run_id),
+            finding_id=updates.get("finding_id", task.finding_id),
+            revision_sha=updates.get("revision_sha", task.revision_sha),
+            created_reason=updates.get("created_reason", task.created_reason) or "MANUAL",
+        )
+        consistent = await task_provenance_dao.provenance_consistency(probe, db=db)
+        if not consistent:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "PROVENANCE_INCONSISTENT",
+                    "message": "provenance fields are not mutually consistent (§4.2); nothing was written",
+                },
+            )
+    for field, value in updates.items():
         setattr(task, field, value)
     await query_dao.flush(db)
     return await _enrich_task_out(task, db)

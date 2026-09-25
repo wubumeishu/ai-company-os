@@ -820,3 +820,134 @@ async def test_graph_supervision_not_applicable(e2e_ac: httpx.AsyncClient) -> No
     r = await e2e_ac.get(f"/api/agents/{_E2E.agent.id}/tasks/{t.id}/graph", headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["ready"] == "not_applicable"
+
+
+@LIVE
+async def test_d2_manual_provenance_fails_closed_and_conversion_lane_still_works(
+    e2e_ac: httpx.AsyncClient,
+) -> None:
+    """D2 / Final-Gate gate #2 (design §4.2 / mapping §1 rule 3): the manual
+    create_task / update_task path must run the §4.2 cross-table provenance
+    integrity check fail-closed, while the LEGAL conversion lane
+    (``TaskDecompositionService``) remains usable.
+
+    - (a) manual POST: MANUAL + a non-null analysis column -> 400, NOTHING written
+    - (b) manual POST/patch: ANALYSIS_FINDING + a revision that does not match
+      the run -> 400, NOTHING written
+    - (c) the legal conversion lane (a fresh dedicated run) still succeeds ->
+      no regression; its provenance-bearing tasks pass the §4.2 gate
+    """
+    await _e2e_seed()
+    headers = _e2e_headers()
+    from app.dao.base import tenant_context
+    from app.database import async_session as DB_SESSION
+    from app.models.analysis import AnalysisFinding, AnalysisRun
+    from app.models.task import Task
+    from app.dao.task_dao import task_provenance_dao
+
+    base = f"/api/agents/{_E2E.agent.id}/tasks"
+    # ``create_task`` is the ``@router.post("/")`` route, so its canonical path
+    # carries a trailing slash; the ASGI client does not follow the 307 that a
+    # bare no-slash POST would produce.
+    create_path = f"{base}/"
+    suffix = uuid.uuid4().hex[:8]
+    tenant = _E2E.tenant.id
+
+    # --- (a) MANUAL but carrying a non-null analysis column -> 400, no write ---
+    title_a = f"d2-manual-{suffix}"
+    r = await e2e_ac.post(
+        create_path,
+        json={
+            "title": title_a,
+            "created_reason": "MANUAL",
+            "analysis_run_id": str(_E2E.run_completed.id),  # must be NULL for MANUAL (§4.2)
+        },
+        headers=headers,
+    )
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "PROVENANCE_INCONSISTENT", r.text
+    # Fail-closed = nothing was written: no Task row with this title exists.
+    async with DB_SESSION() as s:
+        leaked = (await s.execute(select(Task).where(Task.title == title_a))).scalars().all()
+    assert leaked == [], "MANUAL + analysis column must not persist (fail closed)"
+
+    # --- (b) ANALYSIS_FINDING but a revision that does not match the run -> 400 ---
+    title_b = f"d2-forged-{suffix}"
+    forged = {
+        "created_reason": "ANALYSIS_FINDING",
+        "project_id": str(_E2E.project.id),
+        "analysis_run_id": str(_E2E.run_completed.id),
+        "finding_id": str(_E2E.findings[0].id),  # belongs to run_completed
+        "revision_sha": "x" * 64,  # run_completed is "c"*64 -> revision mismatch
+    }
+    r = await e2e_ac.post(create_path, json={"title": title_b, **forged}, headers=headers)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"]["code"] == "PROVENANCE_INCONSISTENT", r.text
+    async with DB_SESSION() as s:
+        leaked_b = (await s.execute(select(Task).where(Task.title == title_b))).scalars().all()
+    assert leaked_b == [], "forged ANALYSIS_FINDING provenance must not persist (fail closed)"
+
+    # --- (b') PATCH the same forgery onto an existing task -> 400, no change ---
+    title_seed = f"d2-patch-{suffix}"
+    async with DB_SESSION() as s, s.begin():
+        patched = Task(
+            agent_id=_E2E.agent.id,
+            created_by=_E2E.user.id,
+            tenant_id=tenant,
+            title=title_seed,
+            status="pending",
+        )
+        s.add(patched)
+        await s.flush()
+    r = await e2e_ac.patch(f"{base}/{patched.id}", json=forged, headers=headers)
+    assert r.status_code == 400, r.text
+    async with DB_SESSION() as s:
+        row = (await s.execute(select(Task).where(Task.id == patched.id))).scalars().first()
+    # The rejected patch wrote nothing: provenance stayed all-NULL / MANUAL.
+    assert row.created_reason == "MANUAL" and row.analysis_run_id is None, "PATCH must not persist a rejected provenance"
+
+    # --- (c) the LEGAL conversion lane still succeeds (no regression).  Seed a
+    #     DEDICATED fresh AN_COMPLETED run + its two executable findings so the
+    #     lane has clean material to convert (independent of the shared seed). ---
+    rev = "d" * 64
+    async with DB_SESSION() as s, s.begin():
+        d2run = AnalysisRun(
+            project_id=_E2E.project.id,
+            revision_sha=rev,
+            status="AN_COMPLETED",
+            tenant_id=tenant,
+        )
+        s.add(d2run)
+        await s.flush()
+        d2f1 = AnalysisFinding(
+            analysis_run_id=d2run.id, severity="WARN", category="TECH_DEBT", tag="FACT",
+            summary="d2 dedicated executable summary",
+            evidence={"anchors": [f"d2-{suffix}.py:1"]}, tenant_id=tenant,
+        )
+        s.add(d2f1)
+        await s.flush()
+    r = await e2e_ac.post(
+        f"/api/projects/{_E2E.project.id}/analysis/{d2run.id}/tasks",
+        json={"agent_id": str(_E2E.agent.id)},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["code"] == "TD_OK" and body["state"] == "ok", body
+    # The lane converted exactly its one executable finding.
+    assert body["counts"]["converted"] == 1, body
+    created_ids = body["converted_task_ids"]
+    assert len(created_ids) == 1, body
+    # The single conversion is the §4.2-legal ANALYSIS_FINDING row; the §4.2 gate
+    # (now enforced on the manual path) must PASS for it (no regression on the
+    # conversion lane the reviewer flagged D2 against).
+    async with DB_SESSION() as s:
+        created = (
+            await s.execute(select(Task).where(Task.id == uuid.UUID(created_ids[0])))
+        ).scalars().one()
+    with tenant_context(tenant):
+        assert await task_provenance_dao.provenance_consistency(created, db=None) is True, (
+            "legal conversion provenance must satisfy §4.2"
+        )
+    assert created.created_reason == "ANALYSIS_FINDING"
+    assert created.analysis_run_id == d2run.id and created.revision_sha == rev

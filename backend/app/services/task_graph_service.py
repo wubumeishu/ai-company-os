@@ -7,6 +7,12 @@ carry ("不实现复杂图计算"):
 - **Edge validation** (§5.1): self-dependency, tenant alignment, same-project,
   todo-only, and cycle prevention (bounded DFS, §5.2) — fail closed, in order,
   with a closed rejection-code set before any row is written.
+  - **R1 serialization (§8 R1):** the §5.2 reachability check is a read-then-
+    write; to close the concurrent-inverse-insert 2-cycle window under Postgres
+    READ COMMITTED, ``_add_edges`` takes a project-scoped transaction advisory
+    lock (``_lock_project_graph``, ``pg_advisory_xact_lock``) around the check
+    + insert, so the second inverse insert observes the first committed edge
+    and is refused by the reachability check.
 - **blocked/ready** (§5.3): DERIVED, not persisted — ``ready`` = every direct
   dependency is ``done`` (an empty dependency set is trivially ready);
   ``blocked`` = some direct dependency is not done. Bounded reads only.
@@ -33,6 +39,9 @@ import uuid
 from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dao import task_dependency_dao, task_provenance_dao
 from app.models.task import Task, TaskDependency
@@ -162,6 +171,28 @@ def upstream_reachable(
     return False
 
 
+async def _lock_project_graph(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> None:
+    """Serialize concurrent edge authoring for one (tenant, project) scope (design §8 R1).
+
+    The §5.2 cycle gate is a read-then-write over the project edge set. Under
+    Postgres READ COMMITTED two concurrent *inverse* inserts (``A->B`` and
+    ``B->A``) can each read the pre-commit state, both pass the reachability
+    check, and both commit a 2-cycle that ``UNIQUE(self-pair)`` + the self
+    ``CHECK`` cannot catch.  Taking a transaction-scoped advisory lock
+    (``pg_advisory_xact_lock``, held until the surrounding transaction
+    commits/rolls back) keyed on the project scope serializes that window: the
+    second writer blocks here until the first commits, then re-reads the
+    committed edge and is refused by the reachability check.  Same precedent as
+    ``chat_session_service._lock_direct_scope`` (hashtextextended scope key).
+    """
+    scope_key = f"task_graph:{tenant_id}:{project_id}"
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(scope_key, 0))))
+
+
 class TaskGraphService:
     """The V1 Task Graph semantics owner.  The API lane calls ``add_edge`` /
     ``bulk_add_edges`` / ``remove_edge`` / ``graph`` / ``ensure_ready``;
@@ -249,6 +280,14 @@ class TaskGraphService:
             # Defensive: unreachable once the per-edge project guard passed, but
             # keeps the nullable narrowing honest for the bounded DAO read.
             return GraphEdgeOutcome(state="blocked", code=GRAPH_MISMATCH_PROJECT, detail="edge endpoints belong to different projects")
+
+        # R1 (design §8): serialize this project scope for the check+write window.
+        # The lock is held to transaction end, so the reachability read below
+        # and the §5 write above the caller's commit are one atomic section; a
+        # concurrent inverse insert blocks here until this tx commits, then
+        # re-reads the committed edge and is refused (see _lock_project_graph).
+        await _lock_project_graph(db, tenant_id, project_id)
+
         project_edges = await task_dependency_dao.project_dependency_edges(project_id, db=db, limit=MAX_PROJECT_EDGES)
         pairs = [(e.task_id, e.depends_on_task_id) for e in project_edges]
         for dep, _up in resolved:
