@@ -1,18 +1,40 @@
-"""Task management API routes."""
+"""Task management API routes.
+
+Phase 2D (docs/PHASE_2D_TASK_GRAPH_PROVENANCE_DESIGN.md §6) adds the Task
+Graph lane on top of the legacy CRUD routes:
+
+    POST   /agents/{agent_id}/tasks/{task_id}/dependencies
+                                                  { "depends_on_task_ids": [...] }
+    DELETE /agents/{agent_id}/tasks/{task_id}/dependencies/{dep_task_id}
+    GET    /agents/{agent_id}/tasks/{task_id}/graph
+
+These handlers are pure transport adapters: the closed ``GRAPH_*`` codes and
+the blocked/ready semantics live in ``task_graph_service``; the tenant scope
+lives in the request context (``TenantContextMiddleware``) and the DAO
+tenant filter.  The handlers only map an outcome to a status — 404 for
+``GRAPH_NOT_FOUND``, 409 for the validation rejections, 200/201 on success.
+The ``/graph`` payload embeds the full TaskOut, so every graph read also
+carries the Task's Provenance + Status (design §4/§6).
+"""
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dao import query_dao
+from app.dao.base import tenant_context
+from app.dao.task_dao import task_provenance_dao
 from app.core.permissions import check_agent_access
 from app.core.security import get_current_user
 from app.database import get_db
 from app.models.task import Task, TaskLog
 from app.models.user import User
 from app.schemas.schemas import TaskCreate, TaskLogCreate, TaskLogOut, TaskOut, TaskUpdate
+from app.schemas.task_graph import TaskDependenciesIn, TaskEdgeOut, TaskGraphOut
+from app.services.task_graph_service import GraphEdgeError, task_graph_service
 
 router = APIRouter(prefix="/agents/{agent_id}/tasks", tags=["tasks"])
 
@@ -212,3 +234,141 @@ async def trigger_task(
     asyncio.create_task(execute_task(task.id, agent_id))
 
     return {"status": "triggered", "task_id": str(task_id)}
+
+
+# ---------------------------------------------------------------------------
+# Task Graph (Phase 2D, design §6) — dependency authoring + bounded graph view.
+#
+# All policy (the closed GRAPH_* codes, the §5.1 fail-closed validation order,
+# the §5.3 derived blocked/ready, the tenant/project guards) lives in
+# ``task_graph_service``; these handlers map the outcome to the transport.
+# The read writes nothing; the edge writes ride the caller's request
+# transaction (``get_db`` commits on clean exit — same as ``create_task``).
+# ---------------------------------------------------------------------------
+
+
+def _graph_edge_http(outcome: Any) -> HTTPException:
+    """A blocked ``GRAPH_*`` outcome -> the closed transport mapping.
+
+    Per the service contract (task_graph_service docstring): ``GRAPH_NOT_FOUND``
+    is a 404 (the referenced task / edge is absent for this tenant — a not-found
+    resource); every other closed code is a 409 validation rejection.  Nothing
+    is written on failure.
+    """
+    code = outcome.code
+    if code == "GRAPH_NOT_FOUND":
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"code": code, "message": outcome.detail})
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": code, "message": outcome.detail})
+
+
+async def _load_agent_scoped_task(
+    db: AsyncSession, agent_id: uuid.UUID, task_id: uuid.UUID, current_user: User
+) -> tuple[Task, uuid.UUID]:
+    """``check_agent_access`` + the tenant-scoped task load.
+
+    Returns the task AND its narrowed write-tenant (a 403-class refusal when
+    either the agent or the task carries no tenant context — a tenant-scoped
+    graph edge cannot be authored without one, fail-closed).  A task of
+    another tenant / agent is a 404 by construction (the scoped DAO returns
+    None, never a cross-tenant disclosure).
+    """
+    agent, _access = await check_agent_access(db, current_user, agent_id)
+    # ``check_agent_access`` already guarantees agent.tenant_id == user.tenant_id
+    # (cross-tenant agent -> 403/404).  The graph lane additionally needs a
+    # non-None write tenant: a tenant-scoped edge cannot be authored without one.
+    if agent.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task has no tenant context")
+    with tenant_context(agent.tenant_id):
+        task = await task_provenance_dao.get_scoped(task_id, db=db)
+    if task is None or task.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if task.tenant_id is None:
+        # The task row carries no tenant: the graph lane (M9 tenant-scoped
+        # writes) cannot operate on it — refuse rather than write unscoped.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task has no tenant context")
+    return task, task.tenant_id
+
+
+@router.post("/{task_id}/dependencies", status_code=status.HTTP_201_CREATED)
+async def add_task_dependencies(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    data: TaskDependenciesIn,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Attach direct dependencies to a todo Task (batch of 1 = a single edge).
+
+    The service's §5.1 closed-code validation runs fail-closed before any row
+    is written: 404 when an endpoint is absent for this tenant/agent, 409
+    for ``GRAPH_SELF`` / ``GRAPH_MISMATCH_TENANT`` / ``GRAPH_MISMATCH_PROJECT``
+    / ``GRAPH_SUPERVISION_NOT_ALLOWED`` / ``GRAPH_CYCLE`` / ``GRAPH_EXISTS`` /
+    ``GRAPH_INVALID``.  Success writes the edges in the request transaction.
+    Attaching dependencies never enqueues or executes anything — execution
+    stays on the existing trigger path (Task ≠ Run).
+    """
+    task, tenant = await _load_agent_scoped_task(db, agent_id, task_id, current_user)
+    with tenant_context(tenant):
+        outcome = await task_graph_service.bulk_add_edges(
+            db,
+            task_id=task_id,
+            depends_on_task_ids=data.depends_on_task_ids,
+            tenant_id=tenant,
+        )
+    if outcome.state != "added":
+        raise _graph_edge_http(outcome)
+    return {"task_id": task_id, "added": [str(dep) for dep in data.depends_on_task_ids], "state": outcome.state}
+
+
+@router.delete("/{task_id}/dependencies/{dep_task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_task_dependency(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    dep_task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove one direct dependency edge (404 when the edge is absent).
+
+    Deleting an edge can unblock the task; the task's READY is re-derived on
+    its next execution-gate check (design §5.3/§5.4) — this endpoint never
+    enqueues or executes anything itself.
+    """
+    task, tenant = await _load_agent_scoped_task(db, agent_id, task_id, current_user)
+    with tenant_context(tenant):
+        outcome = await task_graph_service.remove_edge(
+            db, task_id=task_id, depends_on_task_id=dep_task_id, tenant_id=tenant
+        )
+    if outcome.state != "removed":
+        # The URL-named edge is the subject: absent for this tenant -> 404
+        # (GRAPH_NOT_FOUND), mirroring the documented service contract.
+        raise _graph_edge_http(outcome)
+
+
+@router.get("/{task_id}/graph", response_model=TaskGraphOut)
+async def get_task_graph(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The bounded per-task graph view + Provenance + Status (design §6).
+
+    ``ready`` is the §5.3 derived state (ready / blocked / not_applicable);
+    ``task`` is the full TaskOut, so the caller sees the Task's status AND
+    its provenance (``project_id`` / ``analysis_run_id`` / ``finding_id`` /
+    ``revision_sha`` / ``created_reason``) in one read.  A read-only
+    endpoint — it performs no writes and no execution.
+    """
+    task, tenant = await _load_agent_scoped_task(db, agent_id, task_id, current_user)
+    try:
+        with tenant_context(tenant):
+            view = await task_graph_service.graph(db, task_id=task_id, tenant_id=tenant)
+    except GraphEdgeError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found") from None
+    return TaskGraphOut(
+        task=await _enrich_task_out(task, db),
+        ready=view.state,
+        direct_dependencies=[TaskEdgeOut(id=e["id"], status=e["status"]) for e in view.direct_dependencies],
+        blocking=list(view.blocking),
+    )

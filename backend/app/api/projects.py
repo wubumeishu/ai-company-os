@@ -52,6 +52,7 @@ from app.schemas.analysis import (
     KnowledgeIn,
     KnowledgeOut,
 )
+from app.schemas.task_graph import TaskConversionOut, TaskConversionRequest
 from app.schemas.project_intake import (
     AcquisitionOut,
     MaterializationOut,
@@ -619,5 +620,93 @@ async def read_project_knowledge(
     project = await _load_authorized_project(db, project_id, current_user)
     rows = await analysis_service.knowledge(db, project=project, current_user=current_user)
     return [KnowledgeOut.from_knowledge(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Analysis -> Task conversion (Phase 2D, docs/PHASE_2D_ANALYSIS_TASK_MAPPING.md)
+#
+# The explicit conversion step (G1): a human invokes this endpoint against an
+# AN_COMPLETED run and names the executing agent.  ALL policy lives in
+# ``task_decomposition_service`` — the closed TD_* codes, the §3 E1/E2
+# executable grid, the §4 dedup guard, the G5 bound.  This handler only:
+#   - authorizes the project (existing read gate) + the target agent
+#     (``check_agent_access`` 404/403),
+#   - maps the service outcome to the transport: 201 on ``TD_OK`` (the created
+#     pending Tasks + per-finding statuses), 409 on a closed TD_* gate, 403 on
+#     a tenant-security violation.
+#
+# The Agent Assignment boundary (Task != Run): conversion NEVER enqueues or
+# executes (G4).  A converted Task lands in ``status=pending`` — the persisted
+# proposal — and runs only through the existing, separately-authorized manual
+# trigger path.  No Run is created by this endpoint, by construction.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{project_id}/analysis/{run_id}/tasks",
+    response_model=TaskConversionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def convert_analysis_run_to_tasks(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: TaskConversionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Convert this run's executable findings into pending, provenance-bearing
+    Tasks (never enqueued — G4; execution is a separate human act).
+    """
+    from app.services.task_decomposition_service import (
+        DecompositionSecurity,
+        task_decomposition_service,
+    )
+
+    project = await _load_authorized_project(db, project_id, current_user)
+    run = await _load_authorized_run(db, project, run_id)
+    agent, _access_level = await check_agent_access(db, current_user, data.agent_id)  # 404/403 propagate
+
+    try:
+        outcome = await task_decomposition_service.convert(
+            db,
+            project=project,
+            run=run,
+            agent=agent,
+            current_user=current_user,
+        )
+    except (DecompositionSecurity, TenantScopeViolation):
+        # A tenant-isolation violation at the service's M9 gate (target agent
+        # crosses the project tenant): one narrow 403, mirroring the
+        # acquisition/analysis handlers.  No write happened (fail-closed).
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No access: the target agent crosses the project's tenant security boundary",
+        ) from None
+
+    if outcome.state != "ok":
+        # A closed TD_* gate rejected the whole invocation before any write
+        # (409-class, mirroring the AN_* mapping): same body, conflict status.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": outcome.code,
+                "message": outcome.detail,
+                "project_id": str(project_id),
+                "analysis_run_id": str(run_id),
+            },
+        ) from None
+
+    return TaskConversionOut(
+        code=outcome.code or "TD_OK",
+        state=outcome.state,
+        detail=outcome.detail,
+        project_id=project.id,
+        analysis_run_id=run.id,
+        agent_id=agent.id,
+        status="pending",  # G4 invariant: every created Task row is pending, never enqueued
+        converted_task_ids=list(outcome.converted_task_ids),
+        per_finding=dict(outcome.per_finding),
+        counts=dict(outcome.counts),
+    )
 
 

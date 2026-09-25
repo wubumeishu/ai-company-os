@@ -218,11 +218,13 @@ class TaskDependencyDAO(TenantScopedBaseDAO[TaskDependency]):
                 stmt = stmt.where(TaskDependency.tenant_id == tenant_id)
             result = await session_db.execute(stmt)
             await session_db.flush()
-            # ``row_count`` reflects ``cursor.rowcount`` for a DELETE (SQLAlchemy
-            # ``Result``).  The async generic Result[*tuple] doesn't expose it in
-            # pyright's static model, so read it defensively: a missing attribute
-            # (non-DB / mock session in tests) means "not removed" (None -> 0).
-            row_count = int(getattr(result, "row_count", 0) or 0)
+            # ``Result.rowcount`` reflects ``cursor.rowcount`` for the DELETE
+            # (verified against the live Postgres Result: a removed row reads
+            # ``rowcount == 1``).  Read through ``getattr`` because the async
+            # generic ``Result`` surface isn't in pyright's static model; a
+            # mock / non-DB session (DB-free tiers) lacks the attribute and
+            # falls back to 0 = "not removed".
+            row_count = int(getattr(result, "rowcount", 0) or 0)
             return row_count > 0
 
 
