@@ -158,6 +158,14 @@ from app.models.tenant import Tenant
 from app.models.user import User
 
 TERMINAL = ("run_completed", "run_failed", "run_cancelled")
+# A run that has reached a STABLE disposition is SETTLED: either a true
+# terminal, or a durable `waiting_started` (recoverable WAIT after a retryable
+# LLM failure, or a human-approval gate). waiting_started is NOT infinite
+# RUNNING — the worker has released the command and the run is durably
+# checkpointed. Polling to a terminal-only set would burn the whole deadline
+# when every run parks in waiting_user, so the driver settles on this set.
+WAS_SETTLED = "waiting_started"
+SETTLED = TERMINAL + (WAS_SETTLED,)
 
 
 def _ddl(q: str):
@@ -242,12 +250,19 @@ def _install_llm_instrumentation() -> None:
     """Wrap the REAL OpenAICompatibleClient HTTP methods to log every request.
 
     `openai` maps to protocol=openai_compatible -> OpenAICompatibleClient.
-    `complete` is the non-streaming path (web streaming is disabled); `stream`
-    is wrapped too for completeness. On a >=400 the real client raises
+    `complete` and `stream` are wrapped; on a >=400 the real client raises
     LLMError("HTTP {status}: ...") — we record the status verbatim so a 429 /
     5xx is evidence, not papered over.
+
+    The original UNBOUND functions are kept in a closure (NOT as class
+    attributes): storing them on the class would bind them to the instance on
+    attribute access, so `orig(self, ...)` would pass `self` twice and raise
+    "got multiple values for argument 'messages'" on every call.
     """
     from app.services.llm import client as _llm_mod
+
+    orig_complete = _llm_mod.OpenAICompatibleClient.complete
+    orig_stream = _llm_mod.OpenAICompatibleClient.stream
 
     def _status_of(err: Exception) -> str:
         msg = str(err)
@@ -256,11 +271,10 @@ def _install_llm_instrumentation() -> None:
         return "unknown"
 
     async def _wrap_complete(self, *args, **kwargs):
-        orig = self._orig_complete
         req_id = uuid.uuid4().hex[:10]
         t0 = time.time()
         try:
-            resp = await orig(self, *args, **kwargs)
+            resp = await orig_complete(self, *args, **kwargs)
             _LLM_LOG.append({"ts": t0, "kind": "complete", "req": req_id, "status": "ok",
                              "model": self.model, "base_url": self.base_url})
             return resp
@@ -271,11 +285,10 @@ def _install_llm_instrumentation() -> None:
             raise
 
     async def _wrap_stream(self, *args, **kwargs):
-        orig = self._orig_stream
         req_id = uuid.uuid4().hex[:10]
         t0 = time.time()
         try:
-            resp = await orig(self, *args, **kwargs)
+            resp = await orig_stream(self, *args, **kwargs)
             _LLM_LOG.append({"ts": t0, "kind": "stream", "req": req_id, "status": "ok",
                              "model": self.model, "base_url": self.base_url})
             return resp
@@ -285,8 +298,6 @@ def _install_llm_instrumentation() -> None:
                              "base_url": self.base_url, "error": str(exc)[:300]})
             raise
 
-    _llm_mod.OpenAICompatibleClient._orig_complete = _llm_mod.OpenAICompatibleClient.complete
-    _llm_mod.OpenAICompatibleClient._orig_stream = _llm_mod.OpenAICompatibleClient.stream
     _llm_mod.OpenAICompatibleClient.complete = _wrap_complete
     _llm_mod.OpenAICompatibleClient.stream = _wrap_stream
 
@@ -324,6 +335,8 @@ async def _run_monitor(
     peak_runs: list[uuid.UUID] = []
     samples = 0
     observed_claim: dict[uuid.UUID, datetime] = {}
+    # The SAME dict object is shared through stats so the consumer sees it
+    # even if this task is cancelled mid-poll (in-place mutation, no rebind).
     stats.update({"peak": 0, "peak_runs": [], "samples": 0, "observed_claim": observed_claim})
     while time.time() < deadline and not stop_evt.is_set():
         try:
@@ -349,7 +362,10 @@ async def _run_monitor(
         stats["peak_runs"] = [str(r) for r in peak_runs]
         stats["samples"] = samples
         await asyncio.sleep(0.4)
-    stats["observed_claim"] = {str(r): dt.isoformat() for r, dt in observed_claim.items()}
+    # In-place normalization (NOT a rebind): if we were cancelled at the sleep
+    # above, the consumer still sees the UUID-keyed dict and normalizes it.
+    for r, dt in list(observed_claim.items()):
+        observed_claim[str(r)] = dt.isoformat()
 
 
 # ── evidence + verdict (per stage) ────────────────────────────────────────────
@@ -413,9 +429,24 @@ async def _collect_stage_evidence(
                 terminal_ts = e.created_at
             if e.event_type == "run_created":
                 created_ts = e.created_at
+        # A durable WAIT (waiting_started) is a settled disposition, not a
+        # terminal. If a run has a WAIT but no terminal, surface it so the
+        # verdict can record it as a real failure (recorded, not infinite).
+        if terminal is None:
+            for e in events_by_run.get(rid, []):
+                if e.event_type == "waiting_started":
+                    terminal = "waiting_started"
+                    terminal_ts = e.created_at
+                    break
         tl = tools_by_run.get(rid, [])
         write_ok = any(t.tool_name == "write_file" and t.status == "succeeded" for t in tl)
-        cmd_ok = any("_CMD_OK" in (t.result_summary or "") for t in tl if t.tool_name == "execute_code")
+        # The authoritative "the command actually ran" signal is a host
+        # execute_code row that reached status=succeeded (real subprocess,
+        # real exit code). The stdout marker (`MARK_Txx_CMD_OK`) is kept as an
+        # informational check only: result_summary can be truncated, so its
+        # absence is NOT a failure when the execution succeeded.
+        cmd_succeeded = any(t.tool_name == "execute_code" and t.status == "succeeded" for t in tl)
+        cmd_marker_ok = any("_CMD_OK" in (t.result_summary or "") for t in tl if t.tool_name == "execute_code")
         ev["tasks"][lab] = {
             "run_id": str(rid) if rid else None,
             "run_row_exists": bool(rid) and rid in run_exists,
@@ -426,7 +457,8 @@ async def _collect_stage_evidence(
             "run_terminal_ts": terminal_ts.isoformat() if terminal_ts else None,
             "tool_count": len(tl),
             "write_file_ok": write_ok,
-            "execute_code_ok": cmd_ok,
+            "execute_code_ok": cmd_succeeded,
+            "execute_code_marker_ok": cmd_marker_ok,
             "tools": [{"tool": t.tool_name, "status": t.status} for t in tl],
         }
     ev["no_auto_retry"] = {
@@ -434,7 +466,11 @@ async def _collect_stage_evidence(
         "n_start_commands": n_start_cmds,
         "one_start_command_per_run": n_start_cmds == len(all_run_ids),
         "max_command_attempt_count": max_attempt,
-        "no_command_retried": max_attempt == 0,
+        # A start command is created at attempt_count=0; each worker claim
+        # bumps it by 1, so a normally-applied command ends at 1. A value of
+        # 2+ means a command was RELEASED AND RE-CLAIMED within this stage
+        # (release_for_retry) — that is a retry, not a clean single pass.
+        "no_command_retried": max_attempt <= 1,
     }
     return ev
 
@@ -443,27 +479,43 @@ def _stage_verdict(ev: dict, stats: dict, rate_limited: bool) -> tuple[bool, lis
     reasons: list[str] = []
     n_tasks = len(ev.get("tasks", {}))
     clean = 0
-    observed = stats.get("observed_claim") or {}
+    waiting = 0
+    observed = {str(k): v for k, v in (stats.get("observed_claim") or {}).items()}
     for lab, t in ev.get("tasks", {}).items():
         terminal = t.get("run_terminal_event")
         if terminal in TERMINAL:
             clean += 1
+        elif terminal == "waiting_started":
+            # A settled, recoverable WAIT ("model provider remained unavailable
+            # after N attempts"). This is a RECORDED REAL FAILURE, NOT infinite
+            # RUNNING: the worker released the command and the run is durably
+            # checkpointed. It means the provider was unavailable / rate-limited
+            # under this load -> the stage did NOT reach a clean SUCCEEDED
+            # terminal, so the ladder records it and stops.
+            waiting += 1
+            reasons.append(
+                f"{lab}: run parked in durable waiting_started "
+                f"(recorded real failure: model provider unavailable after bounded retries)"
+            )
         else:
-            reasons.append(f"{lab}: run not terminal ({terminal}) — infinite RUNNING / orphan worker")
+            # Genuinely not settled: still not_started/running past the deadline.
+            reasons.append(f"{lab}: run not settled ({terminal}) — infinite RUNNING / orphan worker")
         if t.get("task_status") != "done" and terminal == "run_completed":
             reasons.append(f"{lab}: task status={t.get('task_status')!r}, expected 'done'")
-        if not t.get("write_file_ok"):
-            reasons.append(f"{lab}: write_file did not succeed")
-        if not t.get("execute_code_ok"):
-            reasons.append(f"{lab}: execute_code marker missing")
+        # tool evidence only required for a SUCCEEDED run
+        if terminal == "run_completed":
+            if not t.get("write_file_ok"):
+                reasons.append(f"{lab}: write_file did not succeed")
+            if not t.get("execute_code_ok"):
+                reasons.append(f"{lab}: execute_code marker missing")
         if not t.get("run_row_exists"):
             reasons.append(f"{lab}: AgentRun row missing (no Run registered)")
-        # starvation: not terminal AND never observed claimed within the stage.
+        # starvation: not settled AND never observed claimed within the stage.
         rid = str(t.get("run_id"))
-        if terminal not in TERMINAL and rid and rid not in observed:
-            reasons.append(f"{lab}: never observed claimed and not terminal (claim starvation)")
+        if terminal not in SETTLED and rid and rid not in observed:
+            reasons.append(f"{lab}: never observed claimed and not settled (claim starvation)")
     if rate_limited:
-        reasons.append("rate-limited (429/5xx observed) — safe ceiling hit")
+        reasons.append("rate-limited (429/5xx observed on the real LLM HTTP) — safe ceiling hit")
     # no auto-retry: exactly one start command per Run, none re-claimed.
     nar = ev.get("no_auto_retry", {})
     if not nar.get("one_start_command_per_run", True):
@@ -473,7 +525,9 @@ def _stage_verdict(ev: dict, stats: dict, rate_limited: bool) -> tuple[bool, lis
         )
     if not nar.get("no_command_retried", True):
         reasons.append(f"command was re-claimed (attempt_count up to {nar.get('max_command_attempt_count')})")
-    ok = len(reasons) == 0 and clean == n_tasks and n_tasks > 0
+    # A clean stage = every task reached a SUCCEEDED terminal (no waiting, no
+    # rate-limiting). Any waiting_started makes it not-clean (recorded failure).
+    ok = len(reasons) == 0 and clean == n_tasks and n_tasks > 0 and not rate_limited
     return ok, reasons
 
 
@@ -671,17 +725,19 @@ async def _run_stage_body() -> int:
         worker_tasks = [asyncio.create_task(_worker_loop(c)) for c in worker_components]
         monitor_task = asyncio.create_task(_run_monitor(known_runs, deadline, stop_evt, stats))
 
-        # Drive to completion: poll until every known run reaches a terminal.
-        terminal_count = 0
+        # Drive to completion: poll until every known run reaches a SETTLED
+        # disposition (terminal OR a stable durable WAIT). A run parked in
+        # waiting_started is settled — do not burn the deadline on it.
+        settled_count = 0
         while time.time() < deadline:
             async with async_session() as s:
                 terms = (await s.execute(
                     select(AgentRunEvent.run_id, AgentRunEvent.event_type)
                     .where(AgentRunEvent.run_id.in_(known_runs),
-                           AgentRunEvent.event_type.in_(TERMINAL))
+                           AgentRunEvent.event_type.in_(SETTLED))
                 )).all()
-            terminal_count = len({r for r, _t in terms})
-            if terminal_count >= len(known_runs):
+            settled_count = len({r for r, _t in terms})
+            if settled_count >= len(known_runs):
                 break
             await asyncio.sleep(0.5)
         stop_evt.set()
@@ -719,15 +775,20 @@ async def _run_stage_body() -> int:
 
         # claim waits (persisted created_at -> first observed claimed)
         claim_waits: dict[str, float] = {}
-        observed = stats.get("observed_claim") or {}
+        observed = {str(k): v for k, v in (stats.get("observed_claim") or {}).items()}
         for lab in labels:
             rid = run_ids_by_task.get(lab)
             if not rid:
                 continue
-            obs_iso = observed.get(str(rid))
+            obs_val = observed.get(str(rid))
             created_dt = created_map.get(rid)
-            if obs_iso and created_dt is not None:
-                obs_dt = datetime.fromisoformat(obs_iso)
+            if obs_val is not None and created_dt is not None:
+                # obs_val may be a datetime (monitor cancelled before its
+                # end-of-loop normalization) or an ISO string — normalize both.
+                if isinstance(obs_val, str):
+                    obs_dt = datetime.fromisoformat(obs_val)
+                else:
+                    obs_dt = obs_val
                 cd = created_dt if created_dt.tzinfo else created_dt.replace(tzinfo=UTC)
                 claim_waits[lab] = round((obs_dt - cd).total_seconds(), 3)
 
@@ -736,7 +797,9 @@ async def _run_stage_body() -> int:
             "stage": n, "tasks": n, "workers": n, "scratch_db": STAGE_DB,
             "wall_clock_s": round(wall_clock, 2),
             "n_runs": len(known_runs),
-            "n_terminal": terminal_count,
+            "n_settled": settled_count,
+            "n_terminal": sum(1 for t in ev.get("tasks", {}).values() if t.get("run_terminal_event") in TERMINAL),
+            "n_waiting": sum(1 for t in ev.get("tasks", {}).values() if t.get("run_terminal_event") == "waiting_started"),
             "durations_s": durations,
             "peak_simultaneous_running": stats.get("peak", 0),
             "peak_runs": stats.get("peak_runs", []),
@@ -750,6 +813,7 @@ async def _run_stage_body() -> int:
                 "err_429_count": len(s429),
                 "err_5xx_count": len(s5xx),
                 "errors_verbatim": [e.get("error") for e in err_status][:20],
+                "request_log": stage_llm,
             },
             "intake": intake_log,
         }
@@ -766,7 +830,7 @@ async def _run_stage_body() -> int:
             stage_ev["llm"]["rpm"] = round(len(stage_llm) / wall_clock * 60.0, 2)
         Path(out).write_text(json.dumps(stage_ev, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-        print(f"  stage n={n}: terminal={terminal_count}/{len(known_runs)} "
+        print(f"  stage n={n}: settled={settled_count}/{len(known_runs)} "
               f"peak={stats.get('peak', 0)} wall={wall_clock:.1f}s "
               f"llm_calls={len(stage_llm)} 429={len(s429)} 5xx={len(s5xx)} verdict_ok={ok}")
         for r in reasons:
@@ -852,6 +916,7 @@ def _orchestrate() -> int:
     }
 
     safe_ceiling: int | None = None
+    stopped_at: int | None = None
     stopped_early = False
     stopped_reason = None
 
@@ -879,24 +944,30 @@ def _orchestrate() -> int:
             safe_ceiling = STAGES[stage_no - 2] if stage_no > 1 else 0
             break
         if stage_ev.get("rate_limited") or not stage_ev.get("verdict_ok", False):
-            # rate-limiting OR instability -> record this stage as the ceiling, stop.
-            safe_ceiling = n
+            # rate-limiting OR instability at THIS stage -> the environment's
+            # safe concurrency is the LAST CLEAN stage (the failing stage is
+            # the ceiling marker; the previous one is proven safe).
+            safe_ceiling = STAGES[stage_no - 2] if stage_no > 1 else 0
+            stopped_at = n
             stopped_early = True
-            stopped_reason = "; ".join(stage_ev.get("verdict_reasons", [])) or "stage not clean"
+            stopped_reason = f"stage n={n} not clean; " + ("; ".join(stage_ev.get("verdict_reasons", [])) or "stage not clean")
             break
         safe_ceiling = n  # clean -> this stage is the new safe floor
 
     # finalize the combined verdict + extrapolation note
     if stopped_early:
         combined["stopped_early"] = True
+        combined["stopped_at"] = stopped_at
         combined["stopped_reason"] = stopped_reason
         combined["safe_concurrency"] = safe_ceiling
         combined["note"] = (
-            f"Stopped early: safe ceiling = {safe_ceiling} (rate-limiting / instability at "
-            f"n={safe_ceiling}). Higher stages were NOT executed (do not saturate the API)."
+            f"Stopped early: last CLEAN stage = n={safe_ceiling}; the failing stage was "
+            f"n={stopped_at} (the environment's saturation ceiling). Higher stages were NOT "
+            f"executed (do not saturate the API). Safe concurrency = {safe_ceiling}."
         )
     else:
         combined["stopped_early"] = False
+        combined["stopped_at"] = None
         combined["stopped_reason"] = None
         combined["safe_concurrency"] = 20
         combined["note"] = (
@@ -909,7 +980,7 @@ def _orchestrate() -> int:
     out = _write_combined(combined)
 
     print("\n=== LADDER VERDICT ===")
-    print(f"  stopped_early={stopped_early}  safe_concurrency={safe_ceiling}")
+    print(f"  stopped_early={stopped_early}  stopped_at={stopped_at}  safe_concurrency={safe_ceiling}")
     print(f"  reason: {stopped_reason}")
     print(f"  combined evidence: {out}")
     return 0
