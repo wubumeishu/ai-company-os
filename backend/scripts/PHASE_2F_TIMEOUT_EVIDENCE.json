@@ -1,5 +1,5 @@
 {
-  "scratch_db": "clawith_2f_timeout_93588dd3",
+  "scratch_db": "clawith_2f_timeout_af75341b",
   "llm": {
     "base_url_recorded": "https://apihub.agnes-ai.com/v1",
     "model": "agnes-3.0-flash",
@@ -21,9 +21,9 @@
         "bounded_retries_terminated": true
       },
       "capability_gaps": [],
-      "run_id": "c9b3898e-a064-4f06-919a-c303eb4b04d7",
+      "run_id": "ce53a3bd-c8d4-45c8-9a02-9f52c0613082",
       "intake_ok": true,
-      "thread_id": "c9b3898e-a064-4f06-919a-c303eb4b04d7",
+      "thread_id": "ce53a3bd-c8d4-45c8-9a02-9f52c0613082",
       "worker_final_status": "applied",
       "disposition": {
         "checkpoint_status": null,
@@ -35,9 +35,9 @@
         "latest_disposition_event": "waiting_started",
         "checkpoint_count": 7,
         "latest_checkpoint": {
-          "id": "1f1b9c42-211a-6f37-8005-cc1887b3d367",
+          "id": "1f1b9c5a-ad49-674d-8005-78005d2c0426",
           "type": null,
-          "snippet": "{\"v\": 4, \"id\": \"1f1b9c42-211a-6f37-8005-cc1887b3d367\", \"ts\": \"2026-09-26T16:05:46.150891+00:00\", \"versions_seen\": {\"model\": {\"branch:to:model\": \"000000000000000"
+          "snippet": "{\"v\": 4, \"id\": \"1f1b9c5a-ad49-674d-8005-78005d2c0426\", \"ts\": \"2026-09-26T16:16:45.095098+00:00\", \"versions_seen\": {\"model\": {\"branch:to:model\": \"000000000000000"
         }
       },
       "latest_disposition_event": "waiting_started",
@@ -61,8 +61,8 @@
         "single_run": true
       },
       "capability_gaps": [],
-      "deadline_target": "http://127.0.0.1:62398/ (local slow, sleeps 10s; gate opened run-scoped)",
-      "run_id": "5e591b7c-79b1-4ab1-bb67-e1ffa492fd1b",
+      "deadline_target": "http://127.0.0.1:64760/ (local slow, sleeps 10s; gate opened run-scoped)",
+      "run_id": "f574ad6b-2503-4681-9f70-66d4cf40d377",
       "elapsed_s": 3.06,
       "tool_step_return": {
         "messages": 1,
@@ -103,7 +103,7 @@
         "real_executor_records_timeout": true
       },
       "capability_gaps": [],
-      "orphan_check": "child_pid=29072 pid_alive=False orphan_markers=0 (expect pid_alive=False, markers=0)",
+      "orphan_check": "child_pid=22356 pid_alive=False orphan_markers=0 (expect pid_alive=False, markers=0)",
       "real_executor_outcome": {
         "status": "failed",
         "error_code": "sandbox_execution_failed",
@@ -115,11 +115,11 @@
         "success": false,
         "exit_code": 124,
         "error": "command_timeout",
-        "stdout": "DIRECT_OUT\nPID 29072\n",
+        "stdout": "DIRECT_OUT\nPID 22356\n",
         "stderr": "DIRECT_ERR",
-        "duration_ms": 3236
+        "duration_ms": 3010
       },
-      "child_pid": 29072,
+      "child_pid": 22356,
       "invariant_d": {
         "no_infinite_running": true,
         "no_false_success": true,
@@ -129,7 +129,7 @@
       "single_run_note": "command-timeout path spawns no Run — no duplicate/orphan Run possible"
     }
   },
-  "generated_at": "2026-09-26T16:05:17.669752+00:00",
+  "generated_at": "2026-09-26T16:16:16.135535+00:00",
   "global_orphan_markers": 0,
   "global_no_orphan_process": true
 }

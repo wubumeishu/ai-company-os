@@ -91,27 +91,28 @@ os.environ.setdefault("LOG_LEVEL", "WARNING")
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import importlib  # noqa: E402
+import importlib
 
 _PKG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "app", "models")
 for _m in os.listdir(_PKG):
     if _m.endswith(".py") and _m != "__init__.py":
         importlib.import_module(f"app.models.{_m[:-3]}")
 
-from sqlalchemy import select, text as sa_text  # noqa: E402
-from app.config import get_settings  # noqa: E402
-from app.core.security import encrypt_data  # noqa: E402
-from app.database import Base, async_session, create_async_engine, engine  # noqa: E402
-from app.models.agent import Agent  # noqa: E402
-from app.models.agent_run import AgentRun  # noqa: E402
-from app.models.agent_run_command import AgentRunCommand  # noqa: E402
-from app.models.agent_run_event import AgentRunEvent  # noqa: E402
-from app.models.agent_tool_execution import AgentToolExecution  # noqa: E402
-from app.models.llm import LLMModel  # noqa: E402
-from app.models.task import Task, TaskLog  # noqa: E402
-from app.models.tenant import Tenant  # noqa: E402
-from app.models.user import User  # noqa: E402
-from app.services import agent_tools  # noqa: E402
+from sqlalchemy import select
+from sqlalchemy import text as sa_text
+
+from app.config import get_settings
+from app.core.security import encrypt_data
+from app.database import Base, async_session, create_async_engine, engine
+from app.models.agent import Agent
+from app.models.agent_run import AgentRun
+from app.models.agent_run_event import AgentRunEvent
+from app.models.agent_tool_execution import AgentToolExecution
+from app.models.llm import LLMModel
+from app.models.task import Task
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.services import agent_tools
 
 SETTINGS = get_settings()
 EVIDENCE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PHASE_2F_TIMEOUT_EVIDENCE.json")
@@ -128,10 +129,10 @@ class _SlowLLM(BaseHTTPRequestHandler):
 
     SLOW_SECONDS = 30
 
-    def log_message(self, *a):  # noqa: D102
+    def log_message(self, *a):
         pass
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         ln = int(self.headers.get("Content-Length", 0))
         self.rfile.read(ln)
         time.sleep(self.SLOW_SECONDS)
@@ -154,7 +155,7 @@ class _FastToolLLM(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         ln = int(self.headers.get("Content-Length", 0))
         self.rfile.read(ln)
         code = (
@@ -202,10 +203,10 @@ class _SlowWebpage(BaseHTTPRequestHandler):
     the agent_tool_executions row to tool_deadline_exceeded.
     """
 
-    def log_message(self, *a):  # noqa: D102
+    def log_message(self, *a):
         pass
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         time.sleep(B_WEBPAGE_SLOW_S)
         body = b"<html><head><title>slow</title></head><body><h1>slow</h1></body></html>"
         self.send_response(200)
@@ -262,7 +263,7 @@ class _HostPortableSandbox:
                 # killing the child. Capture the partial output so the timeout
                 # evidence (stderr present, child reaped) is real.
                 try:
-                    cp = subprocess.run(argv, cwd=str(tmp), capture_output=True, text=True, timeout=timeout)
+                    cp = subprocess.run(argv, cwd=str(tmp), capture_output=True, text=True, timeout=timeout, check=False)
                     return ("done", cp.returncode, cp.stdout, cp.stderr, None)
                 except subprocess.TimeoutExpired as te:
                     out = (te.output.decode("utf-8", "replace") if isinstance(te.output, bytes) else (te.output or ""))
@@ -281,7 +282,7 @@ class _HostPortableSandbox:
                 success=(code_ == 0), stdout=(out or "")[:20000], stderr=(err or "")[:10000],
                 exit_code=code_ if code_ is not None else 0, duration_ms=int((time.time() - t0) * 1000),
             )
-        except Exception as exc:  # host spawn failure -> captured, not crash
+        except Exception as exc:  # noqa: BLE001 - host spawn failure -> captured, not crash
             return ExecutionResult(False, "", str(exc), 1, int((time.time() - t0) * 1000),
                                    f"host_spawn_failed: {exc}")
 
@@ -305,14 +306,11 @@ def _install_isolation(host: _HostPortableSandbox) -> None:
 
     storage = LocalStorageBackend(SCRATCH_WS)
     for mod in (agent_tools, wcs):
-        try:
-            mod.workspace_locks = _cm
-        except Exception:
-            pass
+        mod.workspace_locks = _cm
     agent_tools.get_storage_backend = lambda: storage
     wcs.get_storage_backend = lambda: storage
     agent_tools.WORKSPACE_ROOT = Path(SCRATCH_WS)
-    import app.services.sandbox.registry as registry
+    from app.services.sandbox import registry
     registry.get_sandbox_backend = lambda cfg: host
     if hasattr(agent_tools, "get_sandbox_backend"):
         agent_tools.get_sandbox_backend = lambda cfg: host
@@ -387,14 +385,14 @@ async def _seed_base() -> dict:
 
 async def _seed_tool(agent: uuid.UUID, name: str, tenant: uuid.UUID | None = None, enabled: bool = True) -> None:
     """Register a canonical builtin Tool + AgentTool row so the loader offers it."""
-    from app.models.tool import Tool, AgentTool
+    from app.models.tool import AgentTool, Tool
     from app.services.builtin_tool_definitions import builtin_model_definition, builtin_policy
 
     d = builtin_model_definition(name)
     fn = d.get("function", {})
     try:
         pol = builtin_policy(name) or {}
-    except Exception:
+    except Exception:  # noqa: BLE001 - unknown policy -> default to {} so seeding still works
         pol = {}
     tid = uuid.uuid4()
     async with async_session() as s, s.begin():
@@ -420,7 +418,7 @@ def _orphan_markers() -> int:
     specific child was reaped is the PID check (`_pid_alive`); this helper is a
     coarser net that counts python.exe processes created during the C window.
     """
-    r = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True)
+    r = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, check=False)
     out = r.stdout.decode("cp949", errors="replace")
     # A lingering sleep child would appear as a python.exe running our scratch script.
     return sum(1 for ln in out.splitlines() if "clawith_2f_timeout_cmd_" in ln)
@@ -439,7 +437,7 @@ def _pid_alive(pid: int | None) -> bool:
     """Whether a given host PID is still present in the process table."""
     if not pid:
         return False
-    r = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True)
+    r = subprocess.run(["tasklist", "/fo", "csv", "/nh"], capture_output=True, check=False)
     out = r.stdout.decode("cp949", errors="replace")
     return any(f'"{pid}"' in ln for ln in out.splitlines())
 
@@ -479,7 +477,7 @@ async def _run_disposition(run_id: uuid.UUID, thread_id: str | None) -> dict:
                 {"id": str(snap.checkpoint_id), "type": snap.type, "snippet": snap.snippet}
                 if snap else None
             )
-        except Exception as exc:  # checkpoint read is an observation aid, not authoritative
+        except Exception as exc:  # noqa: BLE001 - checkpoint read is an observation aid, not authoritative
             out["checkpoint_read_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
     return out
 
@@ -499,9 +497,9 @@ async def _run_count_for_execution(exec_key_prefix: str, tenant: uuid.UUID) -> i
 # CLASS A — LLM timeout
 # ─────────────────────────────────────────────────────────────────────────────
 async def run_class_a(base: dict) -> dict:
-    from app.services.task_executor import enqueue_task_runtime
-    from app.services.agent_runtime.worker_service import build_runtime_worker_components
     from app.services.agent_runtime.checkpointer import create_checkpointer
+    from app.services.agent_runtime.worker_service import build_runtime_worker_components
+    from app.services.task_executor import enqueue_task_runtime
 
     ev: dict = {"class": "A", "timeout_value": LLM_REQUEST_TIMEOUT_S, "checks": {}, "capability_gaps": []}
     srv, port, _t = _start_server(_SlowLLM)
@@ -597,8 +595,8 @@ async def run_class_a(base: dict) -> dict:
 # CLASS B — Tool timeout
 # ─────────────────────────────────────────────────────────────────────────────
 async def run_class_b(base: dict) -> dict:
+    from app.services.agent_runtime.state import RunInputSnapshots, RunRegistrySnapshot, RuntimeContext
     from app.services.agent_runtime.tool_step_service import RuntimeToolStepService
-    from app.services.agent_runtime.state import RuntimeContext, RunRegistrySnapshot, RunInputSnapshots
 
     ev: dict = {"class": "B", "timeout_value": B_TOOL_DEADLINE_S, "checks": {}, "capability_gaps": []}
     agent = base["agent_b"]
@@ -749,7 +747,7 @@ async def run_class_c(base: dict, host: _HostPortableSandbox) -> dict:
             runtime_code_timeout_seconds=float(C_COMMAND_TIMEOUT_S),
         )
         ev["real_executor_outcome"] = _outcome_dict(real_outcome)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - executor raised -> record it in evidence, keep the class result
         ev["real_executor_outcome"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
     # C2. The documented host subprocess seam run directly: prove kill + no-orphan
@@ -857,13 +855,10 @@ def evaluate_invariants(ev: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def _verdict(ev: dict) -> bool:
     ok = True
-    for ckey, c in ev.get("classes", {}).items():
+    for c in ev.get("classes", {}).values():
         if c.get("capability_gaps"):
             continue
-        for k, v in c.get("checks", {}).items():
-            if v is False:
-                ok = False
-        for k, v in c.get("invariant_d", {}).items():
+        for v in list(c.get("checks", {}).values()) + list(c.get("invariant_d", {}).values()):
             if v is False:
                 ok = False
     if not ev.get("global_no_orphan_process"):
