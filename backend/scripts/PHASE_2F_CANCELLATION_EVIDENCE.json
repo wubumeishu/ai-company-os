@@ -1,0 +1,73 @@
+{
+  "run_terminal_event": "run_cancelled",
+  "command_rows": [
+    {
+      "type": "start",
+      "status": "rejected",
+      "error_code": "cancelled_before_apply",
+      "idempotency_key": "start:task:7280884c-e348-4e14-b1b1-58e767969a68"
+    },
+    {
+      "type": "cancel",
+      "status": "applied",
+      "error_code": null,
+      "idempotency_key": "cancel:2f-a4dba66b"
+    }
+  ],
+  "events": [
+    {
+      "type": "run_created",
+      "summary": "Runtime Run created"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool execute_code started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool execute_code unknown"
+    },
+    {
+      "type": "run_cancelled",
+      "summary": "Runtime Run cancelled"
+    }
+  ],
+  "tool_executions": [
+    {
+      "tool": "execute_code",
+      "status": "unknown",
+      "result_summary": "Tool execution was cancelled after a possible write; reconcile before retrying.",
+      "error_code_hint": "tool_cancelled_outcome_unknown",
+      "started_at": "2026-09-26T12:45:31.988752+00:00",
+      "updated_at": "2026-09-26T12:45:32.267618+00:00"
+    }
+  ],
+  "tool_exec_after_cancel": 0,
+  "task_status": "pending",
+  "task_derived_state": "CANCELLED",
+  "task_cancel_log": "⏹️ 任务执行已取消：cancel:2f-verification",
+  "run_count": 1,
+  "inflight_proc_terminated": true,
+  "inflight_proc_registered": true,
+  "process_table_run_entries": 0,
+  "tool_cancelled_code": "tool_cancelled_outcome_unknown",
+  "run_status": "cancelled",
+  "task_logs": [
+    "🤖 已进入持久化执行队列（Run a4dba66b-2579-48ff-bd97-1ad5c37b363c）",
+    "⏹️ 任务执行已取消：cancel:2f-verification"
+  ],
+  "process_table_live_entries": 0,
+  "inflight_pid_count": 1,
+  "inflight_pid_still_running": [],
+  "task_active_run_id": null,
+  "task_settled_state": [
+    "cancelled"
+  ],
+  "scratch_db": "clawith_2f_cancel_a2c1f12f",
+  "local_llm": {
+    "url": "http://127.0.0.1:53418/v1",
+    "deterministic_canned": true,
+    "real_llm_turns": 0,
+    "endpoint_requests": 1
+  }
+}
