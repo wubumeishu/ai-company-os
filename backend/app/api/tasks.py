@@ -32,8 +32,18 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.models.task import Task, TaskLog
 from app.models.user import User
-from app.schemas.schemas import TaskCreate, TaskLogCreate, TaskLogOut, TaskOut, TaskUpdate
+from app.schemas.schemas import (
+    TaskCreate,
+    TaskExecuteOut,
+    TaskExecutionOut,
+    TaskLogCreate,
+    TaskLogOut,
+    TaskOut,
+    TaskRunOut,
+    TaskUpdate,
+)
 from app.schemas.task_graph import TaskDependenciesIn, TaskEdgeOut, TaskGraphOut
+from app.services.task_execution_service import TaskExecutionError, task_execution_service
 from app.services.task_graph_service import GraphEdgeError, task_graph_service
 
 router = APIRouter(prefix="/agents/{agent_id}/tasks", tags=["tasks"])
@@ -202,6 +212,23 @@ async def update_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
 
     updates = data.model_dump(exclude_unset=True)
+    # §1.2/U-6 (Phase 2E spec): PATCH may write ``status`` ONLY to
+    # ``pending`` (a human reset of a failed/blocked task back to a queueable
+    # state).  ``doing``/``done`` are owned by the Runtime completion
+    # handler — writing them via PATCH is a 409 rejection (root §十二: no
+    # second lifecycle, no human override of terminal state).  Any other
+    # value is rejected at the transport as a 400.
+    if updates.get("status") is not None:
+        if updates["status"] not in ("pending", "doing", "done"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": "TASK_STATUS_INVALID", "message": "unknown task status value"},
+            )
+        if updates["status"] in ("doing", "done"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "TASK_STATUS_WRITE_FORBIDDEN", "message": "status may only be reset to 'pending' via PATCH"},
+            )
     # D2 / Final-Gate gate #2 (design §4.2 "落库前 fail closed"): when the patch
     # touches ANY of the five provenance fields, the resulting row must satisfy
     # the §4.2 cross-table integrity rules BEFORE the managed row is mutated.
@@ -287,7 +314,17 @@ async def trigger_task(
     result = await query_dao.execute(db, select(Task).where(Task.id == task_id, Task.agent_id == agent_id))
     task = result.scalar_one_or_none()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    # Phase 2E §10.1 (spec §1.2/U-3): a re-trigger of a ``done`` todo Task is
+    # rejected at BOTH entry points — the legacy trigger path gains the same
+    # terminal guard as Execute (audit §5.3 I-2 hole: today the trigger would
+    # re-open done → doing via task_executor.py:127).
+    if task.type == "todo" and task.status == "done":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "TASK_TERMINAL", "message": "Task is already complete (terminal for todo Tasks)"},
+        )
 
     import asyncio
     from app.services.task_executor import execute_task
@@ -432,3 +469,117 @@ async def get_task_graph(
         direct_dependencies=[TaskEdgeOut(id=e["id"], status=e["status"]) for e in view.direct_dependencies],
         blocking=list(view.blocking),
     )
+
+
+# ---------------------------------------------------------------------------
+# Task Execution (Phase 2E, spec §10) — Execute + execution query.
+#
+# Both handlers are pure transport adapters (backend/AGENTS.md boundary
+# rule): parse → ``check_agent_access`` → call the owning service
+# (``task_execution_service``) → map the outcome.  The closed ``§6.3``
+# codes, the P1–P8 gate, the R1–R5 attempt keying, and the audit writes
+# all live in the service; nothing here touches ORM rows.
+# ---------------------------------------------------------------------------
+
+# §6.3 → HTTP mapping (spec §4 "HTTP mapping in §7.2"): the 409 class for
+# every closed gate code that is NOT a not-found resource; a 404 for the
+# not-found resources themselves.
+_NOT_FOUND_CODES = frozenset({"TASK_NOT_FOUND", "PROJECT_NOT_FOUND", "AGENT_NOT_FOUND"})
+
+
+def _execute_http(exc: TaskExecutionError) -> HTTPException:
+    """Map a closed gate code to its transport response (fail-closed)."""
+    body: dict[str, Any] = {"code": exc.code, "message": exc.detail}
+    if exc.unmet_dependencies:
+        body["unmet_dependencies"] = [str(t) for t in exc.unmet_dependencies]
+    if exc.active_run_id is not None:
+        body["active_run_id"] = str(exc.active_run_id)
+    if exc.code in _NOT_FOUND_CODES:
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=body)
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=body)
+
+
+@router.post("/{task_id}/execute", response_model=TaskExecuteOut)
+async def execute_task(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Execute a ready todo Task (assign + trigger in one, spec §10.1).
+
+    The binding is the ``Task.agent_id`` FK (spec §1.1 — no agent id in the
+    body).  On 200 the response carries ``created`` (R1: a double-click
+    reuses the in-flight Run with ``created=false``), the Run identity, and
+    the §6.2 ``derived_state``.  Rejections are 404 (not-found resource) /
+    409 (the closed gate code set, §6.3) — on ANY gate failure NOTHING is
+    enqueued (fail-closed, spec §4).  Writes ride the request transaction
+    (``get_db`` commits on clean exit).
+    """
+    agent, _access = await check_agent_access(db, current_user, agent_id)
+    if agent.tenant_id is None:
+        # A tenant-scoped execute cannot run without a write tenant
+        # (spec §4 P1 / §9) — refuse rather than write unscoped.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent has no tenant context")
+    task = await _agent_task_for_execution(db, agent_id, task_id)
+    try:
+        outcome = await task_execution_service.execute(
+            db, task=task, agent=agent, current_user=current_user
+        )
+    except TaskExecutionError as exc:
+        raise _execute_http(exc) from exc
+    return TaskExecuteOut(
+        task_id=outcome.task_id,
+        created=outcome.created,
+        run_id=outcome.run_id,
+        source_execution_id=outcome.source_execution_id,
+        attempt_id=outcome.attempt_id,
+        derived_state=outcome.derived_state,
+    )
+
+
+@router.get("/{task_id}/execution", response_model=TaskExecutionOut)
+async def query_task_execution(
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The task's execution projection (spec §10.2).
+
+    ``derived_state`` is the §6.2 projection (computed, never stored);
+    ``runs`` is the task's bounded Run registry list (stable first attempt
+    + ordered retry attempts), each with its attempt label, settlement
+    state, and the latest TaskLog line as ``result_summary`` (root §十五:
+    reuse TaskLog — no new Artifact system).  A read-only endpoint.
+    """
+    agent, _access = await check_agent_access(db, current_user, agent_id)
+    task = await _agent_task_for_execution(db, agent_id, task_id)
+    view = await task_execution_service.query_execution(
+        db, task=task, agent=agent, current_user=current_user
+    )
+    return TaskExecutionOut(
+        task=await _enrich_task_out(task, db),
+        derived_state=view.derived_state,
+        active_run_id=view.active_run_id,
+        runs=[
+            TaskRunOut(
+                run_id=r.run_id,
+                source_execution_id=r.source_execution_id,
+                attempt=r.attempt,
+                started_at=r.started_at,
+                settled_state=r.settled_state,
+                result_summary=r.result_summary,
+            )
+            for r in view.runs
+        ],
+    )
+
+
+async def _agent_task_for_execution(db: AsyncSession, agent_id: uuid.UUID, task_id: uuid.UUID) -> Task:
+    """The transport's task load: a task of another agent/tenant → 404."""
+    result = await query_dao.execute(db, select(Task).where(Task.id == task_id, Task.agent_id == agent_id))
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    return task

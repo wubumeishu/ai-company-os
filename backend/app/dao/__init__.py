@@ -5,6 +5,7 @@ from app.dao.agent_dao import agent_dao
 from app.dao.agent_metrics_dao import agent_metrics_dao
 from app.dao.agent_run_dao import agent_run_dao
 from app.dao.agent_template_dao import agent_template_dao
+from app.dao.audit_dao import audit_log_dao
 from app.dao.base import TenantScopedBaseDAO, tenant_context
 from app.dao.chat_message_dao import chat_message_dao
 from app.dao.chat_session_dao import chat_session_dao
@@ -23,6 +24,7 @@ from app.dao.trigger_dao import trigger_dao
 from app.dao.user_dao import user_dao
 
 __all__ = [
+    "TenantScopedBaseDAO",
     "activity_dao",
     "agent_access_dao",
     "agent_credential_dao",
@@ -30,6 +32,7 @@ __all__ = [
     "agent_metrics_dao",
     "agent_run_dao",
     "agent_template_dao",
+    "audit_log_dao",
     "chat_message_dao",
     "chat_session_dao",
     "focus_dao",
@@ -46,6 +49,5 @@ __all__ = [
     "tenant_context",
     "tenant_dao",
     "trigger_dao",
-    "TenantScopedBaseDAO",
     "user_dao",
 ]

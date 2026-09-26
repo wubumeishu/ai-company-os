@@ -432,6 +432,40 @@ class TaskLogOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─── Phase 2E Task Execution (spec §10.1/§10.2) ──────────────────────────────
+
+
+class TaskRunOut(BaseModel):
+    """One entry of the §10.2 ``runs`` list (bounded per Task)."""
+
+    run_id: uuid.UUID
+    source_execution_id: str
+    attempt: str  # "first" | "retry:<attempt_id>"
+    started_at: datetime
+    settled_state: str | None = None  # "completed" | "failed" | "cancelled" | None
+    result_summary: str | None = None
+
+
+class TaskExecuteOut(BaseModel):
+    """§10.1 Execute response (200 only — rejections are 404/409 bodies)."""
+
+    task_id: uuid.UUID
+    created: bool
+    run_id: uuid.UUID | None = None
+    source_execution_id: str | None = None
+    attempt_id: uuid.UUID | None = None
+    derived_state: str | None = None
+
+
+class TaskExecutionOut(BaseModel):
+    """§10.2 execution projection — computed, never stored (root §十二)."""
+
+    task: TaskOut
+    derived_state: str
+    active_run_id: uuid.UUID | None = None
+    runs: list[TaskRunOut] = []
+
+
 # ─── LLM ────────────────────────────────────────────────
 
 class LLMModelCreate(BaseModel):
