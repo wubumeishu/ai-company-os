@@ -1,15 +1,13 @@
 """Diagnostic: inspect a ladder stage scratch DB (read-only, 0 LLM calls)."""
 import asyncio
-import os
 import sys
-import uuid
 
 DB = sys.argv[1] if len(sys.argv) > 1 else "clawith_2f_perf_s1_5"
 
 
 async def main() -> int:
+
     import asyncpg
-    from datetime import datetime
 
     conn = await asyncio.wait_for(
         asyncpg.connect(f"postgresql://postgres:postgres@localhost:5432/{DB}"), timeout=15
@@ -68,7 +66,8 @@ async def main() -> int:
         chk = await conn.fetch(
             "SELECT count(*) AS n FROM langgraph_checkpoint.checkpoints")
         print(f"langgraph checkpoints: {chk[0]['n']}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper: a missing/renamed
+        # checkpoint table should report, not crash the read-only inspection.
         print(f"checkpoint table read failed: {exc}")
 
     await conn.close()

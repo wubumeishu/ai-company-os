@@ -13,7 +13,9 @@ async def main() -> int:
     url = ADMIN.replace("postgresql+asyncpg://", "postgresql://")
     try:
         conn = await asyncio.wait_for(asyncpg.connect(url), timeout=10)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - preflight: ANY connect failure (DNS,
+        # auth, timeout, unreachable) is the report; a narrow catch would hide
+        # the real reason the preflight could not reach Postgres.
         print(f"PG_CONNECT_FAIL: {exc}")
         return 1
     rows = await conn.fetch("SELECT current_setting('server_version') AS v, 1 AS ok")

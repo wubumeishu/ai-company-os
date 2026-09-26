@@ -1,4 +1,8 @@
-import asyncio, sys, json
+import asyncio
+import json
+import sys
+
+
 async def main():
     import asyncpg
     db = sys.argv[1] if len(sys.argv)>1 else "clawith_2f_perf_s1_5"

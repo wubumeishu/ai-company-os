@@ -1,0 +1,856 @@
+{
+  "stage": 10,
+  "tasks": 10,
+  "workers": 10,
+  "scratch_db": "clawith_2f_perf_fin1_10",
+  "wall_clock_s": 61.97,
+  "n_runs": 10,
+  "n_settled": 10,
+  "n_terminal": 10,
+  "n_waiting": 0,
+  "durations_s": {
+    "T00": {
+      "total_s": 11.491,
+      "exec_s": 7.686
+    },
+    "T01": {
+      "total_s": 12.324,
+      "exec_s": 8.719
+    },
+    "T02": {
+      "total_s": 12.384,
+      "exec_s": 8.17
+    },
+    "T03": {
+      "total_s": 12.164,
+      "exec_s": 8.541
+    },
+    "T04": {
+      "total_s": 13.445,
+      "exec_s": 9.759
+    },
+    "T05": {
+      "total_s": 61.732,
+      "exec_s": 57.408
+    },
+    "T06": {
+      "total_s": 11.371,
+      "exec_s": 7.779
+    },
+    "T07": {
+      "total_s": 14.0,
+      "exec_s": 10.096
+    },
+    "T08": {
+      "total_s": 11.155,
+      "exec_s": 6.696
+    },
+    "T09": {
+      "total_s": 12.777,
+      "exec_s": 8.439
+    }
+  },
+  "peak_simultaneous_running": 10,
+  "peak_runs": [
+    "f2207f1a-0b70-4f44-9b7a-402fbc48ea8f",
+    "c7902e98-bd66-45aa-bb6c-140f6f36b0a3",
+    "e6ac1b62-6efc-434d-b23a-da491027660c",
+    "6eff8518-cbe1-436c-9fb3-f083a8263110",
+    "9fe4dbf0-0a64-481f-80fa-9717bed423d3",
+    "a9c38989-69d9-49ee-83d1-1f71f480e122",
+    "da6318fd-ab5d-44f1-8781-6299b70d03f3",
+    "363931d1-9f6a-41d8-87cf-867b25ec4d6b",
+    "455abc2a-8b21-4ea6-b35e-00120325d623",
+    "86ee1183-2b37-41b5-a0a5-c93841b46a2b"
+  ],
+  "monitor_samples": 145,
+  "claim_wait_s": {
+    "T00": 1.001,
+    "T01": 1.001,
+    "T02": 1.001,
+    "T03": 1.001,
+    "T04": 1.001,
+    "T05": 1.001,
+    "T06": 1.001,
+    "T07": 0.616,
+    "T08": 0.616,
+    "T09": 0.616
+  },
+  "no_auto_retry": {
+    "n_runs": 10,
+    "n_start_commands": 10,
+    "one_start_command_per_run": true,
+    "max_command_attempt_count": 1,
+    "no_command_retried": true
+  },
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "model": "agnes-3.0-flash",
+    "provider": "openai",
+    "real_http": true,
+    "no_mock": true,
+    "request_count": 55,
+    "err_429_count": 0,
+    "err_5xx_count": 1,
+    "errors_verbatim": [
+      "HTTP 500: {\"error\":{\"message\":\"Failed to reach upstream, please retry later (request id: 20260926183514325209003pqUhRN70)\",\"type\":\"AgnesAI_error\",\"param\":\"\",\"code\":\"do_request_failed\"}}"
+    ],
+    "request_log": [
+      {
+        "ts": 1790447681.8281984,
+        "kind": "complete",
+        "req": "79ed3e319e",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447681.908551,
+        "kind": "complete",
+        "req": "4c8bb5bd26",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447681.9836433,
+        "kind": "complete",
+        "req": "addd262bc0",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447682.0580735,
+        "kind": "complete",
+        "req": "ae5984f28c",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447682.3820634,
+        "kind": "complete",
+        "req": "93946c6d91",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447681.7354047,
+        "kind": "complete",
+        "req": "37cbcc4a77",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447682.3189485,
+        "kind": "complete",
+        "req": "b278193379",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447682.1349008,
+        "kind": "complete",
+        "req": "93415ca75e",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447682.2396154,
+        "kind": "complete",
+        "req": "c1b3ffcfe1",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447681.59892,
+        "kind": "complete",
+        "req": "2780d92b47",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447684.5511816,
+        "kind": "complete",
+        "req": "be31f01ab3",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447684.4341474,
+        "kind": "complete",
+        "req": "b95fb8ea5b",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447685.5303805,
+        "kind": "complete",
+        "req": "9ff631f662",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447684.9907365,
+        "kind": "complete",
+        "req": "1786e39e43",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447684.6423266,
+        "kind": "complete",
+        "req": "b60b9e1c3c",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447684.7735503,
+        "kind": "complete",
+        "req": "719b5b027f",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447685.4556596,
+        "kind": "complete",
+        "req": "1c3577188a",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447686.5973806,
+        "kind": "complete",
+        "req": "f1dcc7dcaf",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447685.3902493,
+        "kind": "complete",
+        "req": "a27222a79c",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447685.2878394,
+        "kind": "complete",
+        "req": "ccb34f1757",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447687.5643482,
+        "kind": "complete",
+        "req": "946a6d3b52",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447687.7996085,
+        "kind": "complete",
+        "req": "a8c54acc16",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447687.9938562,
+        "kind": "complete",
+        "req": "558e85a7e6",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447686.464218,
+        "kind": "complete",
+        "req": "df30fce7c2",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447685.1713152,
+        "kind": "complete",
+        "req": "95f8809995",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447687.8889434,
+        "kind": "complete",
+        "req": "bd68d9d43e",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447688.4356306,
+        "kind": "complete",
+        "req": "54744b5449",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447687.664926,
+        "kind": "complete",
+        "req": "6d0a068cf4",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447688.8787556,
+        "kind": "complete",
+        "req": "7cf6e83e78",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447689.8424728,
+        "kind": "complete",
+        "req": "7c2f8ba0b5",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447688.9824963,
+        "kind": "complete",
+        "req": "5cc71754f7",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447688.1638021,
+        "kind": "complete",
+        "req": "4938e099d2",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447690.4793086,
+        "kind": "complete",
+        "req": "e743327f77",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447689.4484153,
+        "kind": "complete",
+        "req": "61aaad651e",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447689.5863638,
+        "kind": "complete",
+        "req": "85f5a3f4d8",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447690.5482752,
+        "kind": "complete",
+        "req": "a59c2e1171",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447690.3851256,
+        "kind": "complete",
+        "req": "38965ad21e",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447690.2253308,
+        "kind": "complete",
+        "req": "fd92542f90",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447691.366398,
+        "kind": "complete",
+        "req": "d3ee2430c8",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447689.5169408,
+        "kind": "complete",
+        "req": "e12652bde2",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447694.7799952,
+        "kind": "complete",
+        "req": "5c29adcd24",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447696.6418498,
+        "kind": "complete",
+        "req": "dc538627e8",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447698.7883673,
+        "kind": "complete",
+        "req": "b7821ed28f",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447700.2309532,
+        "kind": "complete",
+        "req": "ac0e0d58a7",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447706.7014282,
+        "kind": "complete",
+        "req": "cdf243f592",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447708.7337737,
+        "kind": "complete",
+        "req": "b8713284d8",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447713.0775125,
+        "kind": "complete",
+        "req": "d6efbd6aa4",
+        "status": "error:500",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1",
+        "error": "HTTP 500: {\"error\":{\"message\":\"Failed to reach upstream, please retry later (request id: 20260926183514325209003pqUhRN70)\",\"type\":\"AgnesAI_error\",\"param\":\"\",\"code\":\"do_request_failed\"}}"
+      },
+      {
+        "ts": 1790447715.569217,
+        "kind": "complete",
+        "req": "2e99fb62a4",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447718.0499392,
+        "kind": "complete",
+        "req": "ed1e4cfcff",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447724.8834302,
+        "kind": "complete",
+        "req": "1342256d80",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447728.8410077,
+        "kind": "complete",
+        "req": "39030eb96c",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447732.7490864,
+        "kind": "complete",
+        "req": "f054ae989b",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447736.0691152,
+        "kind": "complete",
+        "req": "e9bcf3cefd",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447737.8785658,
+        "kind": "complete",
+        "req": "3e124a5d9a",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      },
+      {
+        "ts": 1790447739.9024615,
+        "kind": "complete",
+        "req": "f38b254335",
+        "status": "ok",
+        "model": "agnes-3.0-flash",
+        "base_url": "https://apihub.agnes-ai.com/v1"
+      }
+    ],
+    "rpm": 53.26
+  },
+  "intake": [
+    {
+      "task": "T00",
+      "run": "455abc2a",
+      "blocked": false
+    },
+    {
+      "task": "T01",
+      "run": "6eff8518",
+      "blocked": false
+    },
+    {
+      "task": "T02",
+      "run": "86ee1183",
+      "blocked": false
+    },
+    {
+      "task": "T03",
+      "run": "da6318fd",
+      "blocked": false
+    },
+    {
+      "task": "T04",
+      "run": "9fe4dbf0",
+      "blocked": false
+    },
+    {
+      "task": "T05",
+      "run": "a9c38989",
+      "blocked": false
+    },
+    {
+      "task": "T06",
+      "run": "e6ac1b62",
+      "blocked": false
+    },
+    {
+      "task": "T07",
+      "run": "f2207f1a",
+      "blocked": false
+    },
+    {
+      "task": "T08",
+      "run": "c7902e98",
+      "blocked": false
+    },
+    {
+      "task": "T09",
+      "run": "363931d1",
+      "blocked": false
+    }
+  ],
+  "tasks_detail": {
+    "T00": {
+      "run_id": "455abc2a-8b21-4ea6-b35e-00120325d623",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.326939+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:52.012674+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T01": {
+      "run_id": "6eff8518-cbe1-436c-9fb3-f083a8263110",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.126728+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:52.845691+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T02": {
+      "run_id": "86ee1183-2b37-41b5-a0a5-c93841b46a2b",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.736040+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:52.905906+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T03": {
+      "run_id": "da6318fd-ab5d-44f1-8781-6299b70d03f3",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.145054+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:52.685793+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T04": {
+      "run_id": "9fe4dbf0-0a64-481f-80fa-9717bed423d3",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.208804+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:53.967559+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T05": {
+      "run_id": "a9c38989-69d9-49ee-83d1-1f71f480e122",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.845442+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:35:42.253782+00:00",
+      "tool_count": 8,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        },
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        },
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        },
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T06": {
+      "run_id": "e6ac1b62-6efc-434d-b23a-da491027660c",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.114179+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:51.892734+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T07": {
+      "run_id": "f2207f1a-0b70-4f44-9b7a-402fbc48ea8f",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.426079+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:54.522347+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T08": {
+      "run_id": "c7902e98-bd66-45aa-bb6c-140f6f36b0a3",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.981697+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:51.677540+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "T09": {
+      "run_id": "363931d1-9f6a-41d8-87cf-867b25ec4d6b",
+      "run_row_exists": true,
+      "task_status": "done",
+      "run_created_ts": "2026-09-26T18:34:40.522167+00:00",
+      "first_tool_ts": "2026-09-26T18:34:44.860342+00:00",
+      "run_terminal_event": "run_completed",
+      "run_terminal_ts": "2026-09-26T18:34:53.299144+00:00",
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_ok": true,
+      "execute_code_marker_ok": false,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    }
+  },
+  "verdict_ok": false,
+  "verdict_reasons": [
+    "rate-limited (429/5xx observed on the real LLM HTTP) — safe ceiling hit"
+  ],
+  "rate_limited": true
+}
