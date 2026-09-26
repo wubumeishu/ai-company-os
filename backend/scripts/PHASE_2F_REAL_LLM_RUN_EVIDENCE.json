@@ -1,0 +1,90 @@
+{
+  "run_status": "completed",
+  "run_thread": "17b192dd-e684-4d8f-829b-d180af4dacf4",
+  "command_status": [
+    "applied"
+  ],
+  "events": [
+    {
+      "type": "run_created",
+      "summary": "Runtime Run created"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool read_file started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool read_file succeeded"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool write_file started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool write_file succeeded"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool execute_code started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool execute_code failed"
+    },
+    {
+      "type": "run_completed",
+      "summary": "Runtime Run completed"
+    }
+  ],
+  "tool_executions": [
+    {
+      "tool": "read_file",
+      "status": "succeeded",
+      "result_ref": null,
+      "result_summary": "📄 workspace/probe_input.txt (lines 1-3 of 3)\n     1\talpha\n     2\tbeta\n     3\tgamma"
+    },
+    {
+      "tool": "write_file",
+      "status": "succeeded",
+      "result_ref": null,
+      "result_summary": "Written to workspace/output.txt (20 chars)."
+    },
+    {
+      "tool": "execute_code",
+      "status": "failed",
+      "result_ref": null,
+      "result_summary": "📤 Output:\nCMD_STDOUT_OK\n\n\n⚠️ Stderr:\nCMD_STDERR_OK\n\n\nExit code: 3"
+    }
+  ],
+  "tool_result_refs": {},
+  "command_captured": {
+    "present": true,
+    "stdout": true,
+    "stderr": true,
+    "exit_code_nonzero": true,
+    "tool_status": "failed",
+    "raw_summary": "📤 Output:\nCMD_STDOUT_OK\n\n\n⚠️ Stderr:\nCMD_STDERR_OK\n\n\nExit code: 3"
+  },
+  "task_status": "done",
+  "task_logs": [
+    "🤖 已进入持久化执行队列（Run 17b192dd-e684-4d8f-829b-d180af4dacf4）",
+    "✅ 任务完成\n\n三步都已按顺序执行完毕，结果如下：\n\n1. **读取** `workspace/probe_input.txt`：文件共 3 行，内容为 `alpha`、`beta`、`gamma`，首行是 **alpha**。\n2. **写入** `workspace/output.txt`：内容为「第1步读到的文件首行是 \"alpha\"。」，已成功落盘（工具确认写入 20 字符）。\n3. **"
+  ],
+  "workspace_revisions": {
+    "workspace/output.txt": 1
+  },
+  "tool_result_sample": "📤 Output:\nCMD_STDOUT_OK\n\n\n⚠️ Stderr:\nCMD_STDERR_OK\n\n\nExit code: 3",
+  "run_terminal_event": "run_completed",
+  "run_model": "950d67b7-775f-4de0-beb7-a537a7cbf06c",
+  "scratch_db": "clawith_2f_realrun_5ccfa256",
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "provider": "openai",
+    "model": "agnes-3.0-flash",
+    "real_http": true,
+    "no_mock": true
+  },
+  "host_artifact": "container SubprocessBackend (bwrap+preexec_fn) is Unix-only; one-shot host subprocess stand-in used for the command primitive (documented; stdout/stderr/exit_code are REAL)"
+}

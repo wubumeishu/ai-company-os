@@ -1,0 +1,76 @@
+{
+  "A_read_file_succeeded": {
+    "status": "succeeded",
+    "has_lines": true
+  },
+  "B_create_file_succeeded": {
+    "status": "succeeded",
+    "text_norm": "'hello-2f\\nline2\\n'",
+    "markers_present": true,
+    "revision_trail": {
+      "write": 1,
+      "total": 1
+    },
+    "note": "byte-exact CRLF is a Windows local-mirror I/O artifact; asserting host-portable semantic markers + revision trail"
+  },
+  "C_modify_file_succeeded": {
+    "status": "succeeded",
+    "text_norm": "'updated-2f\\n\\nline2\\n\\n'",
+    "old_replaced": true,
+    "other_marker_intact": true,
+    "revision_trail": {
+      "write": 1,
+      "edit": 1,
+      "total": 2
+    },
+    "note": "CRLF/rare \r\r is a Windows local-mirror I/O artifact; asserting semantic edit + revision trail"
+  },
+  "D_read_metadata_succeeded": {
+    "status": "succeeded",
+    "lists_both": true,
+    "file_count": 2
+  },
+  "E_safe_command_gate": {
+    "safe_passes": true,
+    "dangerous_blocked": true,
+    "block_reason": "Blocked: unsafe operation detected (shutil.rmtree)"
+  },
+  "E_safe_command_runs": {
+    "success": true,
+    "stdout": "42",
+    "exit_code": 0,
+    "runner": "host one-shot subprocess (container persistent path out of scope on win32 — caveat A9)"
+  },
+  "F_result_persistence_success_archived": {
+    "exec_status": "succeeded",
+    "archived": true,
+    "resolved_content_hash": "3a62e1b9b1f55efa...",
+    "resolved_status": "succeeded"
+  },
+  "F_result_persistence_failed_settled": {
+    "exec_status": "failed",
+    "archived": false,
+    "error_code": "workspace_file_not_found"
+  },
+  "F_result_persistence_inline_success": {
+    "exec_status": "succeeded",
+    "archived": false
+  },
+  "verdict": "PASS — all 9 deterministic sub-checks across probes A–F",
+  "scratch_db": "clawith_2f_probes_c06eda21",
+  "scratch_ws": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_ws_p20xdo79",
+  "db_kept": false,
+  "ws_kept": false,
+  "elapsed_s": 8.67,
+  "probes": {
+    "A_read_file_succeeded": true,
+    "B_create_file_succeeded": true,
+    "C_modify_file_succeeded": true,
+    "D_read_metadata_succeeded": true,
+    "E_safe_command_gate": true,
+    "E_safe_command_runs": true,
+    "F_result_persistence_success_archived": true,
+    "F_result_persistence_failed_settled": true,
+    "F_result_persistence_inline_success": true
+  }
+}
