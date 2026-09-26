@@ -267,6 +267,15 @@ Task-row + command-row + latest-Run identity give it; it is labeled
 | `QUEUE_FAILED` | **transient** | `start_run`/commit failure at intake | YES bounded (same 3/Task/day; new attempt key, since a half-registered command may exist — the exact-input check makes re-submitting the same key safe or explicitly mismatched, never silently divergent) |
 | `RUN_FAILED` | terminal per-attempt | Run checkpoint terminal `failed` (settlement → Task `pending`) | YES via R3 (explicit new attempt); root §十三 distinguishes it from Task-failed — Task is recoverable |
 | `VERIFICATION_FAILED` | terminal per-attempt | verify node failure surfaces as terminal `failed` lifecycle today (agent/queue audit §5) | YES via R3 |
+| `RETRY_CAP_EXCEEDED` | **transient, human** | R3 per-task/day **soft cap**: a re-Execute that would mint a NEW retry attempt is rejected when today's `task_execute_retried` audit count is already ≥ `RETRY_SOFT_CAP_PER_TASK_PER_DAY` (3) — `audit_dao.count_task_audit` (task/agent/audit §8), enforced at `task_execution_service.py:202-209` before any enqueue | NO for the day: the cap is a **soft, human-recoverable** bound that resets at the UTC day start; it is bounded (root §十四: no unlimited retry) and never auto-retried (R4) |
+
+> **Transport mapping (closed-code path, §10.1).** `RETRY_CAP_EXCEEDED` is a
+> first-class member of the §6.3 closed code set: the intake service raises it
+> via `TaskExecutionError` (a fail-closed gate rejection, like every other §6.3
+> code), and the Execute transport maps it to **HTTP 409 `CONFLICT`** with body
+> `{ "code": "RETRY_CAP_EXCEEDED", "message": … }` (the same 409 closed-code
+> path as `TASK_BLOCKED`/`TASK_ALREADY_RUNNING`; it is not in the 404
+> not-found set). Nothing is enqueued on this path (fail-closed, root §五).
 
 **UNKNOWN U-C** (agent/queue audit U3): whether verify failures carry a distinct
 error code inside the terminal checkpoint was not audited node-by-node — V1
@@ -348,7 +357,7 @@ body: {}                                    (no agent_id in body — §1.1: the 
 200 → { task_id, created, run_id, source_execution_id, attempt_id?, derived_state }
 404 → TASK/PROJECT/AGENT not found for this tenant/agent
 403 → tenant mismatch at agent access (existing check_agent_access)
-409 → { code ∈ §6.3 closed set, unmet_dependencies?: [...], active_run_id?: ... }
+409 → { code ∈ §6.3 closed set (incl. RETRY_CAP_EXCEEDED, §6.3 addendum), unmet_dependencies?: [...], active_run_id?: ... }
 ```
 
 - Transport only (`api/tasks.py` style: parse → `check_agent_access` → call
