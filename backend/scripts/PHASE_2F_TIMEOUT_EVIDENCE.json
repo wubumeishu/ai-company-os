@@ -1,0 +1,135 @@
+{
+  "scratch_db": "clawith_2f_timeout_93588dd3",
+  "llm": {
+    "base_url_recorded": "https://apihub.agnes-ai.com/v1",
+    "model": "agnes-3.0-flash",
+    "paid_calls": 0,
+    "no_mock": true
+  },
+  "timeout_values": {
+    "A_llm_request_timeout_s": 5,
+    "B_tool_deadline_s": 3,
+    "C_command_timeout_s": 3
+  },
+  "classes": {
+    "A": {
+      "class": "A",
+      "timeout_value": 5,
+      "checks": {
+        "reached_closed_disposition": true,
+        "recoverable_wait_not_false_success": true,
+        "bounded_retries_terminated": true
+      },
+      "capability_gaps": [],
+      "run_id": "c9b3898e-a064-4f06-919a-c303eb4b04d7",
+      "intake_ok": true,
+      "thread_id": "c9b3898e-a064-4f06-919a-c303eb4b04d7",
+      "worker_final_status": "applied",
+      "disposition": {
+        "checkpoint_status": null,
+        "checkpoint_next_route": null,
+        "events": [
+          "run_created | Runtime Run created",
+          "waiting_started | Runtime Run waiting user"
+        ],
+        "latest_disposition_event": "waiting_started",
+        "checkpoint_count": 7,
+        "latest_checkpoint": {
+          "id": "1f1b9c42-211a-6f37-8005-cc1887b3d367",
+          "type": null,
+          "snippet": "{\"v\": 4, \"id\": \"1f1b9c42-211a-6f37-8005-cc1887b3d367\", \"ts\": \"2026-09-26T16:05:46.150891+00:00\", \"versions_seen\": {\"model\": {\"branch:to:model\": \"000000000000000"
+        }
+      },
+      "latest_disposition_event": "waiting_started",
+      "run_count_for_execution": 1,
+      "orphan_worker_check": "in-process worker (no external worker process spawned)",
+      "expected_disposition": "waiting_started",
+      "actual_disposition": "waiting_started",
+      "invariant_d": {
+        "no_infinite_running": true,
+        "no_false_success": true,
+        "single_run": true,
+        "no_orphan_worker": true
+      }
+    },
+    "B": {
+      "class": "B",
+      "timeout_value": 3,
+      "checks": {
+        "tool_row_records_timeout": true,
+        "no_false_success": true,
+        "single_run": true
+      },
+      "capability_gaps": [],
+      "deadline_target": "http://127.0.0.1:62398/ (local slow, sleeps 10s; gate opened run-scoped)",
+      "run_id": "5e591b7c-79b1-4ab1-bb67-e1ffa492fd1b",
+      "elapsed_s": 3.06,
+      "tool_step_return": {
+        "messages": 1,
+        "waiting": false,
+        "error": null
+      },
+      "bounded_retry_deferral": false,
+      "deferral_note": null,
+      "tool_rows": [
+        {
+          "tool": "read_webpage",
+          "status": "failed",
+          "error_code": "tool_deadline_exceeded",
+          "deadline_exceeded": true,
+          "deadline_policy": "network_read",
+          "deadline_seconds": 3.0,
+          "result_summary": "Tool read exceeded its 3s operation deadline."
+        }
+      ],
+      "run_count_for_execution": 1,
+      "invariant_d": {
+        "no_infinite_running": true,
+        "no_false_success": true,
+        "single_run": true,
+        "no_orphan_worker": true
+      }
+    },
+    "C": {
+      "class": "C",
+      "timeout_value": 3,
+      "sleeper_s": 30,
+      "checks": {
+        "child_killed_no_orphan": true,
+        "timeout_exit_captured": true,
+        "stderr_present": true,
+        "no_false_success": true,
+        "real_executor_not_succeeded": true,
+        "real_executor_records_timeout": true
+      },
+      "capability_gaps": [],
+      "orphan_check": "child_pid=29072 pid_alive=False orphan_markers=0 (expect pid_alive=False, markers=0)",
+      "real_executor_outcome": {
+        "status": "failed",
+        "error_code": "sandbox_execution_failed",
+        "result_summary": "Code execution failed with exit code 124.",
+        "retryable": false,
+        "metadata": {}
+      },
+      "direct_execution": {
+        "success": false,
+        "exit_code": 124,
+        "error": "command_timeout",
+        "stdout": "DIRECT_OUT\nPID 29072\n",
+        "stderr": "DIRECT_ERR",
+        "duration_ms": 3236
+      },
+      "child_pid": 29072,
+      "invariant_d": {
+        "no_infinite_running": true,
+        "no_false_success": true,
+        "single_run": true,
+        "no_orphan_worker": true
+      },
+      "single_run_note": "command-timeout path spawns no Run — no duplicate/orphan Run possible"
+    }
+  },
+  "generated_at": "2026-09-26T16:05:17.669752+00:00",
+  "global_orphan_markers": 0,
+  "global_no_orphan_process": true
+}
