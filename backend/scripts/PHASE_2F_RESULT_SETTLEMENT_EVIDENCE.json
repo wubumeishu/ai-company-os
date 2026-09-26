@@ -1,0 +1,98 @@
+{
+  "scratch_db": "clawith_2f_settle_acc411e2",
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "provider": "openai",
+    "model": "agnes-3.0-flash",
+    "seeded_only_not_reinvoked": true
+  },
+  "results": [
+    {
+      "scenario": "Success",
+      "ok": true,
+      "detail": "task=done derived=SUCCEEDED terminal=run_completed log='✅ 任务完成\\n\\nSettlement success: task g'",
+      "checks": {
+        "terminal_event:True": true,
+        "task_status:True": true,
+        "derived_state:True": true,
+        "log_success:True": true
+      },
+      "run_id": "3c90b17d-0a72-4dc5-9747-f696d47eced6",
+      "task_id": "eb0285d2-ecd5-4502-943c-1006dc18cb10",
+      "completed_at": "2026-09-26 07:52:22.813218+00:00"
+    },
+    {
+      "scenario": "Tool failure",
+      "ok": true,
+      "detail": "task=pending derived=FAILED terminal=run_failed log='❌ 任务执行失败：tool_execution_failed'",
+      "checks": {
+        "terminal_event:True": true,
+        "task_status:True": true,
+        "derived_state:True": true,
+        "no_false_success:True": true,
+        "log_failure_or_cancel:True": true
+      },
+      "run_id": "2d604af1-e655-48e1-a773-08fcfeaf5f68",
+      "task_id": "5078eaa2-46b4-4b1f-a509-e2302f5a8934",
+      "completed_at": null
+    },
+    {
+      "scenario": "Verification failure",
+      "ok": true,
+      "detail": "task=pending derived=FAILED terminal=run_failed log='❌ 任务执行失败：verification_repair_limit'",
+      "checks": {
+        "terminal_event:True": true,
+        "task_status:True": true,
+        "derived_state:True": true,
+        "no_false_success:True": true,
+        "log_failure_or_cancel:True": true
+      },
+      "run_id": "e431a8ea-68d9-4763-89ca-1a4ea14da7c2",
+      "task_id": "282c3649-8b3a-4f48-8738-2276e02242e3",
+      "completed_at": null
+    },
+    {
+      "scenario": "Agent failure",
+      "ok": true,
+      "detail": "task=pending derived=FAILED terminal=run_failed log='❌ 任务执行失败：model_step_limit_reached'",
+      "checks": {
+        "terminal_event:True": true,
+        "task_status:True": true,
+        "derived_state:True": true,
+        "no_false_success:True": true,
+        "log_failure_or_cancel:True": true
+      },
+      "run_id": "f2cb5dc7-2dba-4fbe-9f40-d65ae6fc24cf",
+      "task_id": "52ab72fa-e240-4612-9b2d-749b25410ccf",
+      "completed_at": null
+    },
+    {
+      "scenario": "Cancelled",
+      "ok": true,
+      "detail": "task=pending derived=CANCELLED terminal=run_cancelled log='⏹️ 任务执行已取消：cancelled_by_command'",
+      "checks": {
+        "terminal_event:True": true,
+        "task_status:True": true,
+        "derived_state:True": true,
+        "no_false_success:True": true,
+        "log_failure_or_cancel:True": true
+      },
+      "run_id": "8c197fa9-cb84-4052-917a-dc56bdc8e1ac",
+      "task_id": "f45ee14f-7913-4980-9077-f276c2e978f1",
+      "completed_at": null
+    },
+    {
+      "scenario": "Blocked (dependency unmet)",
+      "ok": true,
+      "detail": "intake_blocked=True task=pending derived=BLOCKED unmet_match=True runs_created=0",
+      "checks": {
+        "intake_fail_closed": true,
+        "task_stays_pending": true,
+        "derived_BLOCKED": true,
+        "unmet_dependency": true,
+        "no_run_created": true
+      }
+    }
+  ],
+  "all_pass": true
+}
