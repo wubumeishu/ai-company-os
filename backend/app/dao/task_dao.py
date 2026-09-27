@@ -296,6 +296,30 @@ class TaskProvenanceDAO(TenantScopedBaseDAO[Task]):
         await db.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
 
+    async def update_agent_binding(
+        self,
+        task: Task,
+        *,
+        agent_id: uuid.UUID,
+        db: AsyncSession,
+    ) -> Task:
+        """Re-point the SINGLE assignment fact ``Task.agent_id`` (squad §8).
+
+        The Phase 3 assignment lane (t_9820b3d3) owns this write: one task
+        binds to exactly one agent (the frozen A2 fact, design S5); this
+        method is the only planning-side path that changes it, and it is
+        scoped to the owning tenant's caller (``tenant_context`` + the caller's
+        session) so a cross-tenant task can never be re-pointed.  The flush
+        rides the caller's session; an unchanged binding is a no-op at the
+        service layer (a racing re-apply never flips the fact to a second
+        agent).
+        """
+        task.agent_id = agent_id
+        db.add(task)
+        await db.flush()
+        await db.refresh(task, attribute_names=["updated_at"])
+        return task
+
     async def converted_finding_ids(
         self,
         analysis_run_id: uuid.UUID,
