@@ -591,6 +591,33 @@ class WorkPackageTaskDAO(TenantScopedBaseDAO[WorkPackageTask]):
         async with self.session(db=db, readonly=True) as session_db:
             return (await session_db.execute(stmt)).scalars().all()
 
+    async def get_link_for_task(
+        self,
+        task_id: uuid.UUID,
+        *,
+        db=None,
+    ) -> WorkPackageTask | None:
+        """The (single) link slot that materialized one Task, if any.
+
+        Bounded one-row read by the link's ``task_id``: a Task is materialized
+        into at most one work-package slot (the ``uq_wp_tasks`` UNIQUE guard,
+        §6.2), so this is a single-row read — ``None`` when the Task was not
+        produced by the planning lane (e.g. a MANUAL or ANALYSIS_FINDING task,
+        or a planning task whose link row was re-opened / not yet materialized).
+        The provenance-query path (``PlanningService.provenance_for_task``)
+        consumes this to walk Task -> work package -> goal -> findings.
+        """
+        tenant_id = self._require_tenant_id()
+        stmt = select(WorkPackageTask).where(
+            WorkPackageTask.task_id == task_id,
+            WorkPackageTask.task_id.isnot(None),
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(WorkPackageTask.tenant_id == tenant_id)
+        stmt = stmt.limit(1)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalar_one_or_none()
+
 
 planning_run_dao = PlanningRunDAO()
 planning_goal_dao = PlanningGoalDAO()
