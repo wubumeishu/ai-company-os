@@ -171,6 +171,7 @@ async def lifespan(app: FastAPI):
             import app.models.tenant         # noqa
             import app.models.tenant_setting  # noqa
             import app.models.participant    # noqa
+            import app.models.planning       # noqa
             import app.models.chat_session   # noqa
             import app.models.group          # noqa
             import app.models.trigger        # noqa
