@@ -1,0 +1,112 @@
+{
+  "scratch_db": "clawith_2f_dedup_retry_529eab49",
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "provider": "openai",
+    "model": "agnes-3.0-flash",
+    "real_http": true,
+    "no_mock": true,
+    "real_llm_calls": 2
+  },
+  "dedup_sources": {
+    "service_in_flight_gate": "task_execution_service._gate P3 -> TASK_ALREADY_RUNNING (409, api/tasks.py _execute_http)",
+    "intake_exact_input_dedup": "persistence._resolve_source_retry / adapter._find_start_retry -> created=False",
+    "db_unique": "agent_run.py uq_agent_runs_source_execution (partial unique on source_type+source_execution_id)"
+  },
+  "retry_sources": {
+    "explicit_retry_keying": "task_execution_service._new_attempt_id -> task:{id}:retry:{uuid} (R3/R5, minted only by a human Execute)",
+    "never_automatic": "R4: no queueing facility exists; the bounded post-failure poll is the empirical confirmation",
+    "retry_cap": "audit COUNT of task_execute_retried since UTC day start >= RETRY_SOFT_CAP_PER_TASK_PER_DAY -> RETRY_CAP_EXCEEDED (409)"
+  },
+  "scenario_a": {
+    "task_id": "11f574fd-fda8-4f71-9987-57f9f7a9fe09",
+    "run1": "77d914e5-5711-4eaf-8240-218749f1a4f3",
+    "run_rows": [
+      "task:11f574fd-fda8-4f71-9987-57f9f7a9fe09"
+    ],
+    "terminal_event": "run_completed"
+  },
+  "scenario_b": {
+    "task_id": "ef40c79b-561d-412c-b23d-53db3e85bb66",
+    "run1": "3a16e24d-e990-4cda-bf10-f6af729c0b97",
+    "run2": "b66f76a9-4f1a-426c-af48-a05d91d9f769",
+    "run_rows": [
+      "task:ef40c79b-561d-412c-b23d-53db3e85bb66",
+      "task:ef40c79b-561d-412c-b23d-53db3e85bb66:retry:91388143-b2da-4678-8cc7-fec010c621da"
+    ],
+    "retry_source_execution_id": "task:ef40c79b-561d-412c-b23d-53db3e85bb66:retry:91388143-b2da-4678-8cc7-fec010c621da",
+    "retry_terminal_event": "run_completed"
+  },
+  "scenario_c": {
+    "task_id": "776500f3-db16-4924-b550-be1530da65b3",
+    "retry_cap_case": "RETRY_CAP_EXCEEDED",
+    "retried_audits_seeded": 3,
+    "task_status": "pending",
+    "new_rows_on_capped_retry": 0
+  },
+  "results": [
+    {
+      "scenario": "A: §13 duplicate Run protection (0 new rows)",
+      "ok": true,
+      "detail": "in-flight 2nd execute -> TASK_ALREADY_RUNNING; intake dup created=False same_run=True; rows 1->1; terminal=run_completed",
+      "task_id": "11f574fd-fda8-4f71-9987-57f9f7a9fe09",
+      "run1": "77d914e5-5711-4eaf-8240-218749f1a4f3",
+      "run_rows_before": 1,
+      "run_rows_after_dup": 1,
+      "new_rows_on_duplicate": 0,
+      "source_execution_ids": [
+        "task:11f574fd-fda8-4f71-9987-57f9f7a9fe09"
+      ],
+      "dup_service_gate": "TASK_ALREADY_RUNNING",
+      "dup_intake": {
+        "created": false,
+        "same_run": true
+      },
+      "terminal_event": "run_completed",
+      "real_llm": true
+    },
+    {
+      "scenario": "B: §14 explicit retry (1 new Run, distinct key, no auto-retry)",
+      "ok": true,
+      "detail": "forced terminal=run_failed; auto-retry poll 6x max=1 new_rows=1; retry skey=task:ef40c79b-561d-412c-b23d-53db3e85bb66:retry:91388143-b2da-4678-8cc7-fec010c621da; retry terminal=run_completed",
+      "task_id": "ef40c79b-561d-412c-b23d-53db3e85bb66",
+      "run1": "3a16e24d-e990-4cda-bf10-f6af729c0b97",
+      "run2": "b66f76a9-4f1a-426c-af48-a05d91d9f769",
+      "retry_attempt_id": "91388143-b2da-4678-8cc7-fec010c621da",
+      "retry_source_execution_id": "task:ef40c79b-561d-412c-b23d-53db3e85bb66:retry:91388143-b2da-4678-8cc7-fec010c621da",
+      "run_rows": [
+        "task:ef40c79b-561d-412c-b23d-53db3e85bb66",
+        "task:ef40c79b-561d-412c-b23d-53db3e85bb66:retry:91388143-b2da-4678-8cc7-fec010c621da"
+      ],
+      "no_auto_retry_poll": {
+        "window_s": 6.0,
+        "polls": 6,
+        "row_counts": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "new_rows": 0
+      },
+      "retry_terminal_event": "run_completed",
+      "real_llm_retry": true
+    },
+    {
+      "scenario": "C: §14 RETRY_CAP_EXCEEDED (fail-closed, no new Run)",
+      "ok": true,
+      "detail": "cap=3 seeded retried audits -> 2nd execute -> RETRY_CAP_EXCEEDED; rows 1->1; task=pending",
+      "task_id": "776500f3-db16-4924-b550-be1530da65b3",
+      "retry_cap_case": "RETRY_CAP_EXCEEDED",
+      "retried_audits_seeded": 3,
+      "run_rows": [
+        "task:776500f3-db16-4924-b550-be1530da65b3"
+      ],
+      "task_status": "pending",
+      "new_rows_on_capped_retry": 0
+    }
+  ],
+  "all_pass": true
+}

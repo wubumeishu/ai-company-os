@@ -1,0 +1,224 @@
+{
+  "scratch_db": "clawith_2f_tenant_958e5428",
+  "scratch_ws": "C:/Users/Administrator/AppData/Local/Temp/clawith_2f_tenant_ws_ea6d79",
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "provider": "openai",
+    "model": "agnes-3.0-flash",
+    "real_http": true,
+    "no_mock": true
+  },
+  "tenants": {
+    "A": {
+      "slug": "A",
+      "tenant_id": "d7ee33f9-b0f0-4903-9910-e8758a6e4e49",
+      "user_id": "e0ca9a7f-1696-487c-9819-27afe26a120e",
+      "model_id": "58c2c150-04ad-42f3-9332-22a90008ec36",
+      "agent_id": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+      "task_id": "e1221e7c-e49f-4228-ae61-f7fddb6c0a52",
+      "marker_token": "MARKER_A_tenant_isolation_realrun_v1"
+    },
+    "B": {
+      "slug": "B",
+      "tenant_id": "a36aba70-f175-4448-9e2f-8d56a735d604",
+      "user_id": "020afea7-c84f-42e3-b500-884691397808",
+      "model_id": "18f2d183-66e7-4d89-84a6-364c748d3307",
+      "agent_id": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+      "task_id": "16d52b8c-cf47-4207-ac74-d51be50319b8",
+      "marker_token": "MARKER_B_tenant_isolation_realrun_v1"
+    }
+  },
+  "positive_controls": {
+    "A": {
+      "agent_id": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+      "task_id": "e1221e7c-e49f-4228-ae61-f7fddb6c0a52",
+      "run_id": "7fe310e6-626f-42a4-8dd2-38dfa4a42fb6",
+      "run_status": "completed",
+      "run_terminal_event": "run_completed",
+      "tool_executions": [
+        {
+          "tool": "write_file",
+          "status": "succeeded",
+          "result_summary": "Written to workspace/marker.txt (36 chars)."
+        }
+      ],
+      "workspace_revisions": {
+        "workspace/marker.txt": {
+          "count": 1,
+          "revision_id": "9907d057-c320-42fc-bff9-0cb95059465d",
+          "after_content": "MARKER_A_tenant_isolation_realrun_v1"
+        }
+      },
+      "marker_bytes": "MARKER_A_tenant_isolation_realrun_v1",
+      "marker_path": "workspace/marker.txt",
+      "marker_token": "MARKER_A_tenant_isolation_realrun_v1",
+      "marker_present": true,
+      "denied_read_of_other_marker": null,
+      "marker_in_revision": true,
+      "revisions_present": true,
+      "marker_proof": true
+    },
+    "B": {
+      "agent_id": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+      "task_id": "16d52b8c-cf47-4207-ac74-d51be50319b8",
+      "run_id": "2e60d110-b08a-4400-a94e-a9b6dc5618f3",
+      "run_status": "completed",
+      "run_terminal_event": "run_completed",
+      "tool_executions": [
+        {
+          "tool": "write_file",
+          "status": "succeeded",
+          "result_summary": "Written to workspace/marker.txt (36 chars)."
+        }
+      ],
+      "workspace_revisions": {
+        "workspace/marker.txt": {
+          "count": 1,
+          "revision_id": "0b7afa6c-444a-40ac-8539-075bb323e0d9",
+          "after_content": "MARKER_B_tenant_isolation_realrun_v1"
+        }
+      },
+      "marker_bytes": "MARKER_B_tenant_isolation_realrun_v1",
+      "marker_path": "workspace/marker.txt",
+      "marker_token": "MARKER_B_tenant_isolation_realrun_v1",
+      "marker_present": true,
+      "denied_read_of_other_marker": null,
+      "marker_in_revision": true,
+      "revisions_present": true,
+      "marker_proof": true
+    }
+  },
+  "denials": [
+    {
+      "id": "A→B.agent",
+      "direction": "A->B: use Agent B",
+      "call": "check_agent_access(actor_user=e0ca9a7f…, target_agent_id=5dfbd3e7…) under tenant_context(d7ee33f9…)",
+      "result": {
+        "http": 404,
+        "detail": "Agent not found"
+      },
+      "denied": true,
+      "boundary": "permissions.check_agent_access (scoped agent_dao.get_active + tenant check)"
+    },
+    {
+      "id": "A→B.run",
+      "direction": "A->B: read Run B / its tool executions",
+      "call": "tenant_context(d7ee33f9…): agent_run_dao.get_run(2e60d110…); scoped select(AgentToolExecution) where run_id=target",
+      "result": {
+        "run_read": "None (denied)",
+        "tool_reads": "0 rows (denied)",
+        "denied": true
+      },
+      "denied": true,
+      "run_read": "None (denied)",
+      "tool_reads": "0 rows (denied)",
+      "boundary": "agent_run_dao.get_run (tenant filter) + authoritative do_orm_execute tenant SELECT injection on AgentToolExecution"
+    },
+    {
+      "id": "A→B.workspace",
+      "direction": "A->B: read Workspace B",
+      "call": "STORAGE._full_path('C:/Windows/win.ini'); agent_storage_prefix(caller=3546341c…) vs target '5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7'; check_agent_access under tenant_context(d7ee33f9…)",
+      "result": {
+        "traversal_403": "403 'Path traversal not allowed'",
+        "namespace_confinement": {
+          "caller_anchor_prefix": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+          "target_prefix": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+          "disjoint": true,
+          "note": "a key is always constructed as '{caller_agent_id}/…', so Agent A's tool calls can never address Agent B's subtree"
+        },
+        "api_denied": "404 Agent not found",
+        "denied": true
+      },
+      "denied": true,
+      "traversal_403": "403 'Path traversal not allowed'",
+      "namespace_confinement": {
+        "caller_anchor_prefix": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+        "target_prefix": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+        "disjoint": true,
+        "note": "a key is always constructed as '{caller_agent_id}/…', so Agent A's tool calls can never address Agent B's subtree"
+      },
+      "api_denied": "404 Agent not found",
+      "boundary": "storage_runtime/local.py _full_path 403 traversal guard (A9) + agent_storage_prefix namespace confinement + files-API check_agent_access"
+    },
+    {
+      "id": "A→B.task",
+      "direction": "A->B: execute Task B",
+      "call": "task_execution_service.execute(db, task=16d52b8c…, agent=5dfbd3e7…, current_user=e0ca9a7f…) under tenant_context(d7ee33f9…); intake_security.verify_tenant_scope(agent_tenant=a36aba70…, caller_tenant=d7ee33f9…)",
+      "result": {
+        "gate_refusal": "TaskExecutionError code=TENANT_MISMATCH detail=\"Task/Agent tenant does not match the calling user's tenant\"",
+        "scope_violation": "TenantScopeViolation: record tenant does not match the acting tenant context",
+        "denied": true
+      },
+      "denied": true,
+      "gate_refusal": "TaskExecutionError code=TENANT_MISMATCH detail=\"Task/Agent tenant does not match the calling user's tenant\"",
+      "scope_violation": "TenantScopeViolation: record tenant does not match the acting tenant context",
+      "boundary": "task_execution_service.execute entry gate -> intake_security.verify_tenant_scope (TENANT_MISMATCH / TenantScopeViolation; 409-class, refuses before enqueue)"
+    },
+    {
+      "id": "B→A.agent",
+      "direction": "B->A: use Agent A",
+      "call": "check_agent_access(actor_user=020afea7…, target_agent_id=3546341c…) under tenant_context(a36aba70…)",
+      "result": {
+        "http": 404,
+        "detail": "Agent not found"
+      },
+      "denied": true,
+      "boundary": "permissions.check_agent_access (scoped agent_dao.get_active + tenant check)"
+    },
+    {
+      "id": "B→A.run",
+      "direction": "B->A: read Run A / its tool executions",
+      "call": "tenant_context(a36aba70…): agent_run_dao.get_run(7fe310e6…); scoped select(AgentToolExecution) where run_id=target",
+      "result": {
+        "run_read": "None (denied)",
+        "tool_reads": "0 rows (denied)",
+        "denied": true
+      },
+      "denied": true,
+      "run_read": "None (denied)",
+      "tool_reads": "0 rows (denied)",
+      "boundary": "agent_run_dao.get_run (tenant filter) + authoritative do_orm_execute tenant SELECT injection on AgentToolExecution"
+    },
+    {
+      "id": "B→A.workspace",
+      "direction": "B->A: read Workspace A",
+      "call": "STORAGE._full_path('C:/Windows/win.ini'); agent_storage_prefix(caller=5dfbd3e7…) vs target '3546341c-5ee8-4a1d-b627-f20bf5fe3f5d'; check_agent_access under tenant_context(a36aba70…)",
+      "result": {
+        "traversal_403": "403 'Path traversal not allowed'",
+        "namespace_confinement": {
+          "caller_anchor_prefix": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+          "target_prefix": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+          "disjoint": true,
+          "note": "a key is always constructed as '{caller_agent_id}/…', so Agent A's tool calls can never address Agent B's subtree"
+        },
+        "api_denied": "404 Agent not found",
+        "denied": true
+      },
+      "denied": true,
+      "traversal_403": "403 'Path traversal not allowed'",
+      "namespace_confinement": {
+        "caller_anchor_prefix": "5dfbd3e7-0af8-4eaa-b93b-6d3ca53297f7",
+        "target_prefix": "3546341c-5ee8-4a1d-b627-f20bf5fe3f5d",
+        "disjoint": true,
+        "note": "a key is always constructed as '{caller_agent_id}/…', so Agent A's tool calls can never address Agent B's subtree"
+      },
+      "api_denied": "404 Agent not found",
+      "boundary": "storage_runtime/local.py _full_path 403 traversal guard (A9) + agent_storage_prefix namespace confinement + files-API check_agent_access"
+    },
+    {
+      "id": "B→A.task",
+      "direction": "B->A: execute Task A",
+      "call": "task_execution_service.execute(db, task=e1221e7c…, agent=3546341c…, current_user=020afea7…) under tenant_context(a36aba70…); intake_security.verify_tenant_scope(agent_tenant=d7ee33f9…, caller_tenant=a36aba70…)",
+      "result": {
+        "gate_refusal": "TaskExecutionError code=TENANT_MISMATCH detail=\"Task/Agent tenant does not match the calling user's tenant\"",
+        "scope_violation": "TenantScopeViolation: record tenant does not match the acting tenant context",
+        "denied": true
+      },
+      "denied": true,
+      "gate_refusal": "TaskExecutionError code=TENANT_MISMATCH detail=\"Task/Agent tenant does not match the calling user's tenant\"",
+      "scope_violation": "TenantScopeViolation: record tenant does not match the acting tenant context",
+      "boundary": "task_execution_service.execute entry gate -> intake_security.verify_tenant_scope (TENANT_MISMATCH / TenantScopeViolation; 409-class, refuses before enqueue)"
+    }
+  ],
+  "host_artifact": "container SubprocessBackend (bwrap+preexec_fn) is Unix-only; the one-shot host subprocess stand-in is used only if a run requests execute_code. This isolation test's positive controls only use write_file, so no command primitive is exercised."
+}

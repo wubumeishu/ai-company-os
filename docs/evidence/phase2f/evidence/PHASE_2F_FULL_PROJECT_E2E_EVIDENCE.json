@@ -1,0 +1,191 @@
+{
+  "scratch_db": "clawith_2f_e2e_f92cb90a",
+  "scratch_ws": "C:/Users/Administrator/AppData/Local/Temp/clawith_2f_e2e_476d5e\\storage",
+  "git_repo_commit": "3a210ab28bfbc36b6e31b86ae1076ca818b6b710",
+  "link1_project": {
+    "project_id": "e240dd3e-1956-4dbe-b169-f7ed310f4d23",
+    "status": "RECEIVED",
+    "producer": "ProjectIntakeService.create_intake"
+  },
+  "link3a_acquisition": {
+    "state": "acquired",
+    "code": "ACQ_OK",
+    "artifact_key": "ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1/.git-acq/94b2f649-619b-4919-9bd4-5d5c4d522b14/source.tar",
+    "resolved_rev": "3a210ab28bfbc36b6e31b86ae1076ca818b6b710",
+    "provider": "local_git",
+    "producer": "GitAcquisitionService.acquire (real git clone, host-portable spawn)"
+  },
+  "link3b_intake": {
+    "project_status": "INITIALIZED",
+    "rejection": null,
+    "producer": "ProjectIntakeService.validate_sources (RECEIVED->SOURCES_OK->INITIALIZED)"
+  },
+  "link4_materialization": {
+    "outcome": "SUCCESS",
+    "repo_outcome": "SUCCESS",
+    "reason_code": null,
+    "written": 2,
+    "converged": 0,
+    "producer": "ProjectMaterializationService.materialize (reads the ONE acq tar)",
+    "materialized_files": [
+      {
+        "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_e2e_476d5e\\storage\\ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1\\projects\\e240dd3e-1956-4dbe-b169-f7ed310f4d23\\acq\\legacy\\legacy.py",
+        "on_disk": true,
+        "first_line": "LEGACY-ONE"
+      },
+      {
+        "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_e2e_476d5e\\storage\\ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1\\projects\\e240dd3e-1956-4dbe-b169-f7ed310f4d23\\acq\\README.md",
+        "on_disk": true,
+        "first_line": "# 2f-e2e fixture"
+      }
+    ]
+  },
+  "link5_analysis": {
+    "run_id": "12fba663-4181-451c-909f-80a97d1d232b",
+    "run_status": "AN_COMPLETED",
+    "revision_sha": "3a210ab28bfbc36b6e31b86ae1076ca818b6b710",
+    "finding_id": "f180acd8-f192-4673-ba0a-2efd6d9045fc",
+    "project_status_after": "ANALYZING",
+    "producer": "AnalysisService.launch + record_findings (real persistence lane; findings are recorded data — the lane is static-only by design, stage 11)"
+  },
+  "link6_task": {
+    "task_id": "4d856abd-016b-471e-9da2-f16513284cba",
+    "converted_task_ids": [
+      "4d856abd-016b-471e-9da2-f16513284cba"
+    ],
+    "counts": {
+      "converted": 1,
+      "skipped_duplicate": 0,
+      "planning_only": 0
+    },
+    "per_finding": {
+      "f180acd8-f192-4673-ba0a-2efd6d9045fc": "converted"
+    },
+    "producer": "TaskDecompositionService.convert (created_reason=ANALYSIS_FINDING, full provenance)",
+    "ready": {
+      "task_status": "pending",
+      "derived_state": "READY",
+      "producer": "task_execution_service.query_execution._derive_state (computed)"
+    }
+  },
+  "link7_assignment": {
+    "task_agent_id": "ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1",
+    "task_id": "4d856abd-016b-471e-9da2-f16513284cba",
+    "producer": "Task.agent_id set at convert (G1 human decision); P5 gate at execute"
+  },
+  "link8_run": {
+    "state": "enqueued",
+    "created": true,
+    "run_id": "d6c0dabf-ee4b-49b3-b2da-a72666d97ce0",
+    "derived_state": "QUEUED",
+    "source_execution_id": "task:4d856abd-016b-471e-9da2-f16513284cba",
+    "producer": "task_execution_service.execute -> enqueue_task_runtime (real Phase-2E intake)",
+    "settled": true,
+    "terminal_event": "run_completed",
+    "llm_http_calls": 4,
+    "worker": "RuntimeCommandWorker.run_once (real durable loop)"
+  },
+  "tool_executions": [
+    {
+      "tool": "read_file",
+      "status": "succeeded",
+      "result_ref": null,
+      "result_summary": "📄 projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/legacy/legacy.py (lines 1-2 of 2)\n     1\tLEGACY-ONE\n     2\tLEGACY-TWO"
+    },
+    {
+      "tool": "write_file",
+      "status": "succeeded",
+      "result_ref": null,
+      "result_summary": "Written to projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/FIXNOTES.md (25 chars)."
+    }
+  ],
+  "tool_names": [
+    "read_file",
+    "write_file"
+  ],
+  "read_file_result": "📄 projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/legacy/legacy.py (lines 1-2 of 2)\n     1\tLEGACY-ONE\n     2\tLEGACY-TWO",
+  "workspace_revisions": {
+    "projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/legacy/legacy.py": {
+      "operation": "write",
+      "actor_type": "system",
+      "group_key": "materialize:e240dd3e-1956-4dbe-b169-f7ed310f4d23:94b2f649-619b-4919-9bd4-5d5c4d522b14:ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1",
+      "id": "15a41129-1194-4c91-bdce-6101532cdb31"
+    },
+    "projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/README.md": {
+      "operation": "write",
+      "actor_type": "system",
+      "group_key": "materialize:e240dd3e-1956-4dbe-b169-f7ed310f4d23:94b2f649-619b-4919-9bd4-5d5c4d522b14:ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1",
+      "id": "ddb373af-3eb3-4536-bce9-f45c3ebbed8d"
+    },
+    "projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/FIXNOTES.md": {
+      "operation": "write",
+      "actor_type": "agent",
+      "group_key": null,
+      "id": "4acab9fc-5e0e-43cf-bf06-ce6c463e12b1"
+    }
+  },
+  "command_status": [
+    "applied"
+  ],
+  "run_events": [
+    {
+      "type": "run_created",
+      "summary": "Runtime Run created"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool read_file started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool read_file succeeded"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool write_file started"
+    },
+    {
+      "type": "status_changed",
+      "summary": "Runtime tool write_file succeeded"
+    },
+    {
+      "type": "run_completed",
+      "summary": "Runtime Run completed"
+    }
+  ],
+  "task_final": {
+    "status": "done",
+    "completed_at": "2026-09-26 19:34:53.616015+00:00"
+  },
+  "task_logs": [
+    "🤖 已进入持久化执行队列（Run d6c0dabf-ee4b-49b3-b2da-a72666d97ce0）",
+    "✅ 任务完成\n\n任务已完成。读到了 legacy.py（共 2 行，首行为 \"LEGACY-ONE\"，次行为 \"LEGACY-TWO\"），并已将记录 \"第1步读到的文件首行是 'LEGACY-ONE'。\" 写入 projects/e240dd3e-1956-4dbe-b169-f7ed310f4d23/acq/FIXNOTES.md。"
+  ],
+  "on_disk": {
+    "legacy.py": {
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_e2e_476d5e\\storage\\ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1\\projects\\e240dd3e-1956-4dbe-b169-f7ed310f4d23\\acq\\legacy\\legacy.py",
+      "on_disk": true
+    },
+    "README.md": {
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_e2e_476d5e\\storage\\ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1\\projects\\e240dd3e-1956-4dbe-b169-f7ed310f4d23\\acq\\README.md",
+      "on_disk": true
+    },
+    "FIXNOTES.md": {
+      "path": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\clawith_2f_e2e_476d5e\\storage\\ee5eaf83-8f2c-4f18-9221-3c4f9fe87db1\\projects\\e240dd3e-1956-4dbe-b169-f7ed310f4d23\\acq\\FIXNOTES.md",
+      "on_disk": true,
+      "content": "第1步读到的文件首行是 \"LEGACY-ONE\"。"
+    }
+  },
+  "audit_actions": [
+    "git_acquisition",
+    "project.intake.received",
+    "project.intake.validated",
+    "project_materialization",
+    "task_execute"
+  ],
+  "verification": {
+    "note": "the verify node ran as part of the terminal path: deterministic tool-ledger checks + the LLM TaskCompletionGate (its HTTP call is counted in link8_run.llm_http_calls)",
+    "llm_http_calls_total": 4,
+    "run_terminal": "run_completed"
+  }
+}
