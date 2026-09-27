@@ -1,0 +1,293 @@
+{
+  "branches": {
+    "A": {
+      "task_status": "done",
+      "run_id": "2adf2179-5051-4748-ad6e-07f6f813237f",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "B": {
+      "task_status": "done",
+      "run_id": "0e03e16d-c142-4740-80d0-0b972eba899c",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "C": {
+      "task_status": "done",
+      "run_id": "3c90d5d8-db9e-4fc1-9e85-c1b3f8f5384f",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "D": {
+      "task_status": "done",
+      "run_id": "04cb8f0d-afd4-4ece-8196-51f6110198fb",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        },
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "E": {
+      "task_status": "done",
+      "run_id": "24a456d6-9a11-4980-9526-6c0333570ab3",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    },
+    "F": {
+      "task_status": "done",
+      "run_id": "23f09cdf-7bb4-41da-a879-3ce29412a9a3",
+      "run_row_exists": true,
+      "run_created_event": true,
+      "run_terminal_event": "run_completed",
+      "command_status": [
+        "applied"
+      ],
+      "tool_count": 2,
+      "write_file_ok": true,
+      "execute_code_present": true,
+      "execute_code_marker": false,
+      "has_revision": true,
+      "file_isolated": true,
+      "file_marker_ok": true,
+      "tools": [
+        {
+          "tool": "write_file",
+          "status": "succeeded"
+        },
+        {
+          "tool": "execute_code",
+          "status": "succeeded"
+        }
+      ]
+    }
+  },
+  "workspace_revision_paths": [
+    "workspace/output_A.txt",
+    "workspace/output_B.txt",
+    "workspace/output_C.txt",
+    "workspace/output_D.txt",
+    "workspace/output_E.txt",
+    "workspace/output_F.txt"
+  ],
+  "total_revisions": 6,
+  "intake": {
+    "A": {
+      "run_id": "2adf2179-5051-4748-ad6e-07f6f813237f",
+      "blocked": false,
+      "block_reason": null,
+      "status": "doing"
+    },
+    "B": {
+      "run_id": null,
+      "blocked": true,
+      "block_reason": "731a6e8e-f7e6-403f-821e-a2febf798b7f",
+      "status": "pending"
+    },
+    "C": {
+      "run_id": null,
+      "blocked": true,
+      "block_reason": "8296d5b5-9127-4fba-a1b2-1aae9a93d748",
+      "status": "pending"
+    },
+    "D": {
+      "run_id": "04cb8f0d-afd4-4ece-8196-51f6110198fb",
+      "blocked": false,
+      "block_reason": null,
+      "status": "doing"
+    },
+    "E": {
+      "run_id": "24a456d6-9a11-4980-9526-6c0333570ab3",
+      "blocked": false,
+      "block_reason": null,
+      "status": "doing"
+    },
+    "F": {
+      "run_id": "23f09cdf-7bb4-41da-a879-3ce29412a9a3",
+      "blocked": false,
+      "block_reason": null,
+      "status": "doing"
+    }
+  },
+  "b_no_run_at_t0": true,
+  "c_no_run_at_t0": true,
+  "re_enqueue_ts": {
+    "B": "2026-09-26T19:31:16.414347+00:00",
+    "C": "2026-09-26T19:33:25.875277+00:00"
+  },
+  "task_done_ts": {
+    "A": "2026-09-26T19:31:16.400455+00:00",
+    "B": "2026-09-26T19:33:25.855620+00:00",
+    "C": "2026-09-26T19:33:34.731544+00:00",
+    "D": "2026-09-26T19:33:34.731556+00:00",
+    "E": "2026-09-26T19:33:34.732556+00:00",
+    "F": "2026-09-26T19:33:34.734077+00:00"
+  },
+  "run_ids_by_task": {
+    "A": "2adf2179-5051-4748-ad6e-07f6f813237f",
+    "B": "0e03e16d-c142-4740-80d0-0b972eba899c",
+    "C": "3c90d5d8-db9e-4fc1-9e85-c1b3f8f5384f",
+    "D": "04cb8f0d-afd4-4ece-8196-51f6110198fb",
+    "E": "24a456d6-9a11-4980-9526-6c0333570ab3",
+    "F": "23f09cdf-7bb4-41da-a879-3ce29412a9a3"
+  },
+  "concurrency": {
+    "num_workers": 4,
+    "peak_simultaneous_running": 0,
+    "peak_runs": [],
+    "samples": 0,
+    "trace_sampled": [],
+    "exec_windows": {
+      "A": [
+        "2026-09-26T19:31:09.692718+00:00",
+        "2026-09-26T19:31:16.082778+00:00"
+      ],
+      "B": [
+        "2026-09-26T19:31:18.144469+00:00",
+        "2026-09-26T19:33:25.620590+00:00"
+      ],
+      "C": [
+        "2026-09-26T19:33:27.646958+00:00",
+        "2026-09-26T19:33:34.370360+00:00"
+      ],
+      "D": [
+        "2026-09-26T19:31:09.562860+00:00",
+        "2026-09-26T19:31:15.740605+00:00"
+      ],
+      "E": [
+        "2026-09-26T19:31:09.872135+00:00",
+        "2026-09-26T19:31:15.650055+00:00"
+      ],
+      "F": [
+        "2026-09-26T19:31:10.063357+00:00",
+        "2026-09-26T19:31:16.218480+00:00"
+      ]
+    },
+    "overlapping_pairs": [
+      "AxD",
+      "AxE",
+      "AxF",
+      "DxE",
+      "DxF",
+      "ExF"
+    ],
+    "authoritative_concurrent_pairs": [
+      "AxD",
+      "AxE",
+      "AxF",
+      "DxE",
+      "DxF",
+      "ExF"
+    ]
+  },
+  "scratch_db": "clawith_2f_cc_904632a9",
+  "llm": {
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "provider": "openai",
+    "model": "agnes-3.0-flash",
+    "real_http": true,
+    "no_mock": true
+  },
+  "host_artifact": "container SubprocessBackend (bwrap+preexec_fn) is Unix-only; one-shot host subprocess stand-in used for the command primitive (documented; stdout/stderr/exit_code REAL)"
+}
