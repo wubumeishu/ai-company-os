@@ -33,8 +33,9 @@ without re-implementing the graph walk.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -205,7 +206,18 @@ class PlanExecutionService:
         if agent.tenant_id is None:
             raise TaskExecutionError("TENANT_CONTEXT_MISSING", "Agent has no tenant context")
         write_tenant = agent.tenant_id
-        report = PlanExecutionReport()
+
+        # ``PlanExecutionReport`` is a frozen value object.  Accumulate the
+        # per-outcome tuples into plain locals during the walk and build the
+        # report ONCE at the end — never rebind a frozen attribute inside the
+        # loop (the D1 defect: the shipped code rebound ``report.blocked`` /
+        # ``report.enqueued`` / ``report.skipped_settled`` in-loop and raised
+        # ``FrozenInstanceError`` on any real enqueue).
+        enqueued: list[TaskExecutionOutcome] = []
+        blocked: list[tuple[uuid.UUID, tuple[uuid.UUID, ...]]] = []
+        rejected: dict[uuid.UUID, str] = {}
+        assignment: dict[uuid.UUID, tuple[str, str | None]] = {}
+        skipped_settled: list[uuid.UUID] = []
 
         with tenant_context(write_tenant):
             packages = list(
@@ -224,7 +236,7 @@ class PlanExecutionService:
                         work_package_id=package.id,
                         current_user=current_user,
                     )
-                    report.assignment[package.id] = (outcome.state, outcome.code)
+                    assignment[package.id] = (outcome.state, outcome.code)
                     if outcome.state != "assigned":
                         # Fail-closed: a refused package's tasks stay out of
                         # the execution gate.
@@ -232,7 +244,13 @@ class PlanExecutionService:
                 plan_tasks.extend(await _linked_tasks_for_package(package.id, db=db))
 
             if not plan_tasks:
-                return report
+                return PlanExecutionReport(
+                    enqueued=(),
+                    blocked=(),
+                    rejected=rejected,
+                    assignment=assignment,
+                    skipped_settled=(),
+                )
 
             # 2) The plan's direct dependency DAG (bounded) + safe order.
             plan_task_ids = [task.id for task in plan_tasks]
@@ -256,7 +274,6 @@ class PlanExecutionService:
             # ``done`` as TASK_TERMINAL and ``doing`` as TASK_ALREADY_RUNNING,
             # both of which are the caller's re-invocation artefacts, not
             # plan defects.
-            skipped_settled: list[uuid.UUID] = []
             for task_id in ordered_ids:
                 task = task_by_id[task_id]
                 if task.status in ("done", "doing"):
@@ -268,15 +285,19 @@ class PlanExecutionService:
                     )
                 except TaskExecutionError as error:
                     if error.code == "TASK_BLOCKED":
-                        report.blocked = report.blocked + (
-                            (task.id, tuple(error.unmet_dependencies)),
-                        )
+                        blocked.append((task.id, tuple(error.unmet_dependencies)))
                         continue
-                    report.rejected[task.id] = error.code
+                    rejected[task.id] = error.code
                     continue
-                report.enqueued = report.enqueued + (outcome,)
-            report.skipped_settled = tuple(skipped_settled)
-        return report
+                enqueued.append(outcome)
+
+        return PlanExecutionReport(
+            enqueued=tuple(enqueued),
+            blocked=tuple(blocked),
+            rejected=rejected,
+            assignment=assignment,
+            skipped_settled=tuple(skipped_settled),
+        )
 
 
 plan_execution_service = PlanExecutionService()

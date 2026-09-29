@@ -83,12 +83,12 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
-from collections.abc import AsyncGenerator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -148,15 +148,24 @@ def _probe_live_db() -> bool:
 
 
 def _ensure_schema() -> None:
-    """create_all the full product schema on the scratch DB (idempotent)."""
-    # Register every ORM model on Base.metadata (the full import set — the
-    # proven bootstrap-probe recipe: a partial set silently makes 0 tables
-    # because FK targets are missing from metadata).
-    models_pkg = os.path.join(os.getcwd(), "app", "models")
-    if os.path.isdir(models_pkg):
-        for module in sorted(os.listdir(models_pkg)):
-            if module.endswith(".py") and module != "__init__.py":
-                importlib.import_module(f"app.models.{module[:-3]}")
+    """create_all the full product schema on the scratch DB (idempotent).
+
+    Register every ORM model on ``Base.metadata`` by importing the modules of
+    the ALREADY-IMPORTED ``app.models`` package (``pkgutil.iter_modules`` over
+    its ``__path__``).  This is the full model import set the FK targets need
+    — a partial set silently makes 0 tables.  It is deliberately
+    CWD-INDEPENDENT (the D3 fix): the old code discovered the import set via
+    ``os.path.join(os.getcwd(), "app", "models")`` + ``os.listdir``, so running
+    the suite from the repo root (where that dir is absent) skipped the import
+    loop, left ``Base.metadata`` empty, and ``create_all`` made 0 tables →
+    every live test ERRORED instead of running.
+    """
+    import pkgutil
+
+    import app.models as _models_pkg
+
+    for _mod in pkgutil.iter_modules(_models_pkg.__path__):
+        importlib.import_module(f"app.models.{_mod.name}")
     from app.database import Base, engine
 
     async def _bootstrap() -> None:
@@ -179,10 +188,10 @@ def _install_scratch_storage() -> Any:
     """Local storage backend + no-op (Redis) workspace locks for the tool
     path. The scratch host has no Redis; the real lock path is covered by
     the Phase 2F drivers (docs/evidence/phase2f/)."""
-    from app.services.storage_runtime.local import LocalStorageBackend
     from app.services import agent_tools
     from app.services import workspace_collaboration as wcs
-    import app.services.storage_runtime.facade as facade
+    from app.services.storage_runtime import facade
+    from app.services.storage_runtime.local import LocalStorageBackend
 
     _WS_DIR.mkdir(parents=True, exist_ok=True)
     storage = LocalStorageBackend(str(_WS_DIR))
@@ -196,10 +205,14 @@ def _install_scratch_storage() -> Any:
         yield
 
     for mod in (agent_tools, wcs):
-        try:
-            mod.workspace_locks = _noop_locks
-        except Exception:  # pragma: no cover - attribute already no-op
-            pass
+        # ``workspace_locks`` is a plain module-level name (the imported
+        # asynccontextmanager).  Rebinding it on the module object cannot
+        # raise, so no guard is needed (S110/BLE001).  Written through the
+        # module namespace dict so the static checkers stay quiet: pyright's
+        # opaque view of a foreign module's attributes rejects a bare
+        # attribute write, while ruff B010 rejects a ``setattr`` with a
+        # constant name — the dict write is the one form both accept.
+        vars(mod)["workspace_locks"] = _noop_locks
     yield
     facade._storage_backend = None
 
@@ -241,15 +254,22 @@ def db_factory(_live_db: None) -> async_sessionmaker:
 # mints its OWN analysis run under a fresh revision so committed rows
 # never collide across the module — the proven plansvc seed pattern).
 # ---------------------------------------------------------------------------
-class _SEED:
-    tenant: Any = None
-    user: Any = None
-    agent: Any = None
-    project: Any = None
-    seeded: bool = False
+class _SEEDState:
+    tenant: Any
+    user: Any
+    agent: Any
+    project: Any
+    seeded: bool
+
+    def __init__(self) -> None:
+        self.tenant = None
+        self.user = None
+        self.agent = None
+        self.project = None
+        self.seeded = False
 
 
-_SEED = _SEED()
+_SEED = _SEEDState()
 
 
 async def _seed(db_factory: async_sessionmaker) -> None:
@@ -257,7 +277,6 @@ async def _seed(db_factory: async_sessionmaker) -> None:
     if _SEED.seeded:
         return
     from app.core.security import encrypt_data
-    from app.dao.base import tenant_context
     from app.models.agent import Agent
     from app.models.llm import LLMModel
     from app.models.project import Project
@@ -454,7 +473,8 @@ def _rebind_ports(comps: Any, port: Any) -> None:
 
 def _build_worker(saver: Any, claimant: str) -> Any:
     from app.config import get_settings
-    from app.database import async_session, engine as _lock_engine
+    from app.database import async_session
+    from app.database import engine as _lock_engine
     from app.services.agent_runtime.worker_service import build_runtime_worker_components
 
     return build_runtime_worker_components(
@@ -552,7 +572,7 @@ async def _build_plan(db_factory: async_sessionmaker, revision: str, categories:
 async def test_planning_chain_creates_graph_and_tasks(db_factory: async_sessionmaker) -> None:
     """(1)+(2) sample Project + Analysis → Plan → Task Graph: the plan
     materializes real Tasks + dependency edges through the frozen services."""
-    run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
+    _run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
     assert outcome.state == "created", f"plan {outcome.state}: {outcome.code} {outcome.detail}"
     # Two findings → two goals → two work packages → a serial delivery
     # group: N packages carry N-1 inter-package head->head edges.
@@ -562,7 +582,7 @@ async def test_planning_chain_creates_graph_and_tasks(db_factory: async_sessionm
 
     tenant = _SEED.tenant.id
     from app.dao.base import tenant_context
-    from app.models.planning import PlanningRun, WorkPackage, WorkPackageTask
+    from app.models.planning import PlanningRun, WorkPackage
     from app.models.task import Task, TaskDependency
 
     with tenant_context(tenant):
@@ -599,7 +619,7 @@ async def test_assignment_lane_applies_single_agent_fact(db_factory: async_sessi
     """(3) Plan → Squad/Assignment: apply_assignment writes the single
     Task.agent_id fact per package and emits the report-only plan; a reapply
     is a zero-write no-op (idempotency / deterministic-pick convergence)."""
-    run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
+    _run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
     assert outcome.state == "created"
     from app.dao.base import tenant_context
     from app.models.task import Task
@@ -646,7 +666,7 @@ async def test_assignment_review_independence_refuses_single_candidate(db_factor
     a single-candidate roster the reviewer cannot be disjoint from the
     builder → PL_REVIEWER_NOT_INDEPENDENT before ANY write (fail-closed)."""
     categories = (("SECURITY", "CRITICAL", "FACT", "sec"),)
-    run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}", categories=categories)
+    _run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}", categories=categories)
     assert outcome.state == "created"
     from app.dao.base import tenant_context
     from app.models.task import Task
@@ -679,7 +699,7 @@ async def test_dependency_enforcement_and_settlement(db_factory: async_sessionma
     blocks the dependent task while its upstream is not done; after the
     upstream settles done through the real Runtime worker, the same task
     enqueues and settles too."""
-    run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
+    _run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
     assert outcome.state == "created"
     task_ids = list(plan.materialized_task_ids)
     # In a serial delivery group the last materialized task is downstream
@@ -767,11 +787,113 @@ async def test_dependency_enforcement_and_settlement(db_factory: async_sessionma
     assert "model" in calls
 
 
+async def test_enqueue_plan_tasks_adapter_end_to_end(db_factory: async_sessionmaker) -> None:
+    """D1 acceptance: drive the flagship ADAPTER (``enqueue_plan_tasks``)
+    end-to-end against a reachable Postgres — not just the pure
+    ``topological_order`` helper the shipped E2E exercised.  Before the D1
+    fix the in-loop tuple reassignments on the ``frozen=True`` report raised
+    ``FrozenInstanceError`` on the very first real enqueue, so the flagship
+    deliverable of commit 089fe2c0 was dead code.  A two-finding plan (a
+    serial delivery group) makes ALL THREE report tuple fields populate:
+
+    - call #1 → the ready HEAD enqueues (``enqueued``) and the downstream
+      tasks stay blocked on their not-yet-done upstream (``blocked``);
+    - settle the head Run through the real spine → the head is ``done``;
+    - call #2 (re-invocation) → the settled head is recorded in
+      ``skipped_settled`` and the now-ready dependent enqueues.
+
+    Every assertion below populates a frozen-report tuple field WITHOUT
+    raising, which is the direct regression check for D1."""
+    _run, outcome, plan = await _build_plan(db_factory, f"p3adapt-{uuid.uuid4().hex[:8]}")
+    assert outcome.state == "created"
+    head_task_id = plan.materialized_task_ids[0]  # the ready head: no upstream deps
+
+    from app.dao.base import tenant_context
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.models.user import User
+    from app.services.agent_runtime.checkpointer import create_checkpointer
+    from app.services.plan_execution_service import plan_execution_service
+
+    tenant = _SEED.tenant.id
+    port, _calls = _make_deterministic_port(emit_write=False, fail_model=False)
+
+    def _head_run_id(report: Any) -> uuid.UUID | None:
+        for outcome in report.enqueued:
+            if outcome.task_id == head_task_id:
+                return outcome.run_id
+        return None
+
+    # Call #1: the ready head enqueues (the ``enqueued`` tuple field
+    # populates) and the downstream tasks are blocked on their not-yet-done
+    # upstream (the ``blocked`` tuple field populates) — this single call is
+    # the D1 crash site (the loop re-bound these frozen attributes).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            agent_row = (await sess.execute(select(Agent).where(Agent.id == _SEED.agent.id))).scalar_one()
+            user_row = (await sess.execute(select(User).where(User.id == _SEED.user.id))).scalar_one()
+            report1 = await plan_execution_service.enqueue_plan_tasks(
+                sess,
+                planning_run_id=plan.run.id,
+                agent=agent_row,
+                current_user=user_row,
+            )
+    assert report1.enqueued, "the ready head task must enqueue through the adapter"
+    assert head_task_id in report1.enqueued_task_ids, "the head (no upstream) is the one that enqueues"
+    assert report1.blocked, "the downstream tasks must be blocked on their not-done upstream"
+    assert report1.skipped_settled == (), "nothing is settled at load time on the first call"
+    # The assignment fact was applied to every package (single-candidate → assigned).
+    assert report1.assignment and all(state == "assigned" for state, _code in report1.assignment.values())
+
+    # Drive the enqueued head Run to completion through the real spine.
+    head_run = _head_run_id(report1)
+    assert head_run is not None, "the head enqueue must carry a live Run id"
+    async with create_checkpointer(get_settings()) as saver:
+        await saver.setup()
+        comps = _build_worker(saver, f"p3-adapter-{uuid.uuid4().hex[:8]}")
+        _rebind_ports(comps, port)
+        terminal = await _wait_terminal(head_run, comps.worker)
+    assert terminal == "run_completed", f"head did not settle: {terminal}"
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            assert (await sess.execute(select(Task.status).where(Task.id == head_task_id))).scalar_one() == "done"
+
+    # Call #2 (re-invocation): the settled head now lands in ``skipped_settled``
+    # (the third tuple field populates) and the now-ready dependent enqueues.
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            agent_row = (await sess.execute(select(Agent).where(Agent.id == _SEED.agent.id))).scalar_one()
+            user_row = (await sess.execute(select(User).where(User.id == _SEED.user.id))).scalar_one()
+            report2 = await plan_execution_service.enqueue_plan_tasks(
+                sess,
+                planning_run_id=plan.run.id,
+                agent=agent_row,
+                current_user=user_row,
+            )
+    assert head_task_id in report2.skipped_settled, "the settled head must be skipped, not re-fed to the gate"
+    assert report2.enqueued, "the now-ready dependent must enqueue on re-invocation"
+
+    # Drain the shared inbox: settle every Run call #2 enqueued.  The other
+    # live tests in this module always drive their enqueued Runs to a
+    # terminal state, and a leftover start command here would be claimed by
+    # the NEXT test's worker (shared SKIP-LOCKED inbox), consuming that
+    # test's deterministic port's first-business-call tool step and changing
+    # its tool-path assertions.
+    for settled_outcome in report2.enqueued:
+        assert settled_outcome.run_id is not None
+        async with create_checkpointer(get_settings()) as saver:
+            await saver.setup()
+            comps = _build_worker(saver, f"p3-adapter2-{uuid.uuid4().hex[:8]}")
+            _rebind_ports(comps, port)
+            terminal2 = await _wait_terminal(settled_outcome.run_id, comps.worker)
+        assert terminal2 == "run_completed", f"dependent run did not settle: {terminal2}"
+
+
 async def test_run_tool_result_link(db_factory: async_sessionmaker) -> None:
     """Run → Tool → Result: the real write_file tool node executes against
     the local storage backend; a WorkspaceFileRevision + AgentToolExecution
     row are persisted and the verifier's ref gate (both lists) is met."""
-    run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
+    _run, outcome, plan = await _build_plan(db_factory, f"p3rev-{uuid.uuid4().hex[:8]}")
     assert outcome.state == "created"
     task_id = plan.materialized_task_ids[0]
 
@@ -781,8 +903,8 @@ async def test_run_tool_result_link(db_factory: async_sessionmaker) -> None:
     from app.models.task import Task
     from app.models.user import User
     from app.models.workspace import WorkspaceFileRevision
-    from app.services.task_execution_service import task_execution_service
     from app.services.agent_runtime.checkpointer import create_checkpointer
+    from app.services.task_execution_service import task_execution_service
 
     tenant = _SEED.tenant.id
     port, calls = _make_deterministic_port(emit_write=True, fail_model=False)
@@ -878,7 +1000,9 @@ async def test_parallel_execution_two_workers(db_factory: async_sessionmaker) ->
                     sess, task=task_row, agent=agent_row, current_user=user_row
                 )
                 assert out.state in {"enqueued", "reused"}, out
-                run_ids.append(out.run_id or out.active_run_id)
+                _run_id = out.run_id or out.active_run_id
+                assert _run_id is not None, "an enqueued/reused outcome carries a live Run id"
+                run_ids.append(_run_id)
     assert all(run_ids), "independent tasks must both be enqueued"
 
     settings = get_settings()
@@ -987,6 +1111,7 @@ async def test_failure_handling_no_auto_retry(db_factory: async_sessionmaker) ->
                 sess, task=task_row, agent=agent_row, current_user=user_row
             )
             assert out2.attempt_id is not None, "a re-Execute after a failed terminal mints the R3 attempt"
+            assert out2.run_id is not None, "a re-Execute enqueues a fresh Run"
             assert out2.run_id != out1.run_id
     healthy_port, healthy_calls = _make_deterministic_port(emit_write=False, fail_model=False)
     async with create_checkpointer(get_settings()) as saver:
