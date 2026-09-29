@@ -33,6 +33,7 @@ from app.models.notification import Notification  # noqa: F401
 from app.models.onboarding import UserTenantOnboarding  # noqa: F401
 from app.models.org import AgentAgentRelationship, AgentRelationship, OrgDepartment, OrgMember  # noqa: F401
 from app.models.participant import Participant  # noqa: F401
+from app.models.planning import Milestone, PlanningGoal, PlanningRun, WorkPackage, WorkPackageTask  # noqa: F401
 from app.models.plaza import PlazaComment, PlazaLike, PlazaPost  # noqa: F401
 from app.models.project import Project, Repository  # noqa: F401
 from app.models.schedule import AgentSchedule  # noqa: F401

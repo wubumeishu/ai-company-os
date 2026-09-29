@@ -188,6 +188,29 @@ class AnalysisFindingDAO(TenantScopedBaseDAO[AnalysisFinding]):
         async with self.session(db=db, readonly=True) as session_db:
             return (await session_db.execute(stmt)).scalars().all()
 
+    async def get_by_ids(
+        self,
+        finding_ids: Sequence[uuid.UUID],
+        *,
+        db=None,
+        limit: int = 100,
+    ) -> Sequence[AnalysisFinding]:
+        """Bounded batch read of findings by PK (single query, no N+1).
+
+        The provenance-query path (``PlanningService.provenance_for_task``)
+        resolves the ``PlanningGoal.analysis_finding_ids`` list through this
+        batched read rather than one query per finding.  Empty input returns
+        an empty list (no query issued).
+        """
+        if not finding_ids:
+            return []
+        tenant_id = self._require_tenant_id()
+        stmt = select(AnalysisFinding).where(AnalysisFinding.id.in_(list(finding_ids))).limit(limit)
+        if tenant_id is not None:
+            stmt = stmt.where(AnalysisFinding.tenant_id == tenant_id)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalars().all()
+
 
 class ProjectKnowledgeDAO(TenantScopedBaseDAO[ProjectKnowledge]):
     """Tenant-scoped DAO for project_knowledge rows (durable, confirmed).
