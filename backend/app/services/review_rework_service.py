@@ -138,8 +138,9 @@ class ReworkPlan:
 
     ``new_artifacts`` are the NEW current rows (each ``superseded_by``-free);
     ``supersede_links`` pairs (old_artifact_id, new_artifact_id) the builder
-    must record so the old rows become historical; ``rework_review`` is the
-    re-review row to write (``payload.rework_of`` = the triggering fail-row).
+    must record so the old rows become historical.  The rework step ends HERE
+    (design §3.3 REWORKING->RE_REVIEW: the builder writes "nothing new" — the
+    new set is current); it produces **no** ``kind='review'`` verdict row.
     Old rows are NEVER mutated here — only *linked* (G2).
     """
 
@@ -147,7 +148,6 @@ class ReworkPlan:
     new_artifacts: tuple[ArtifactRecord, ...] = ()
     supersede_links: tuple[tuple[uuid.UUID, uuid.UUID], ...] = ()
     new_evidence: tuple[EvidenceRecord, ...] = ()
-    rework_review: EvidenceRecord | None = None
     detail: str = ""
 
 
@@ -309,16 +309,24 @@ def plan_rework(
     old_artifacts: Sequence[ArtifactRecord],
     new_artifacts: Sequence[ArtifactRecord],
     new_evidence: Sequence[EvidenceRecord],
-    re_review_outcome: str = "inconclusive",
-    re_review_verdict: str = "",
 ) -> ReworkPlan:
     """Guard a rework (REQUEST_CHANGES -> REWORKING -> RE_REVIEW, R5/R6/R7).
 
     Pure, DB-free.  The builder's NEW rows supersede the OLD current set via
-    ``superseded_by`` links (G2: old rows are never mutated, only linked).  The
-    re-review row carries ``payload.rework_of = fail_review.id`` (I-5, G3).  A
-    rework MUST produce new evidence (I-4): at least one new ``test_result`` /
-    ``file_revision`` evidence row bound to the rework execution.
+    ``superseded_by`` links (G2: old rows are never mutated, only linked).
+    The rework step ends at "new artifacts + new evidence + superseded_by
+    links" (design §3.3 REWORKING->RE_REVIEW: the builder writes *nothing
+    new* at RE_REVIEW — the new set is simply current).  It produces **no**
+    ``kind='review'`` verdict row: the re-review VERDICT is a separate
+    disjoint-Reviewer act, recorded via :func:`plan_review` /
+    :meth:`ReviewReworkService.record_review` with ``rework_of =
+    fail_review.id`` (I-5, G3), which enforces invariant-13.  ``builder_agent_id``
+    records *who ran the rework* (the builder, §3.3 REQUEST_CHANGES->
+    REWORKING Actor=Builder) — it is provenance, never a verdict author.
+
+    A rework MUST produce new evidence (I-4): at least one new
+    ``test_result`` / ``file_revision`` evidence row bound to the rework
+    execution.
 
     Fail-closed codes: RV_NO_CURRENT_ARTIFACTS (nothing to supersede / no new
     set), RV_NO_SOURCE-style EV codes are raised later by the DAO; here the
@@ -356,24 +364,15 @@ def plan_rework(
         )
         if old_for_new is not None:
             supersede_links.append((old_for_new.id, new_row.id))
-    # The re-review row (design R6/R7): carries rework_of = the fail row.
-    rework_payload: dict[str, Any] = {"rework_of": str(fail_review.id), "verdict": re_review_verdict}
-    rework_review = EvidenceRecord(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        artifact_id=new_rows[0].id,
-        kind="review",
-        outcome=re_review_outcome,
-        subject_ref=f"evidence://review/{task_id}",
-        payload=rework_payload,
-        created_by_agent=builder_agent_id,
-    )
+    # The rework ends here — new artifacts + new evidence + superseded_by
+    # links.  It writes NO ``kind='review'`` verdict row (the disjoint
+    # reviewer's later record_review(rework_of=fail_review.id) is the RE_REVIEW
+    # verdict, carrying payload.rework_of for G3 provenance).
     return ReworkPlan(
         RV_OK,
         new_artifacts=tuple(new_rows),
         supersede_links=tuple(supersede_links),
         new_evidence=tuple(new_evidence_rows),
-        rework_review=rework_review,
     )
 
 
@@ -516,13 +515,18 @@ class ReviewOutcome:
 
 @dataclass
 class ReworkOutcome:
-    """The result of a :meth:`ReviewReworkService.record_rework` attempt."""
+    """The result of a :meth:`ReviewReworkService.record_rework` attempt.
+
+    The rework ends at "new artifacts + new evidence + superseded_by links".
+    It writes **no** ``kind='review'`` verdict row: the re-review VERDICT is a
+    separate disjoint-Reviewer act (``record_review(rework_of=fail.id)``,
+    invariant-13), so there is no reviewer-row field here.
+    """
 
     code: str
     new_artifact_ids: tuple[uuid.UUID, ...] = ()
     superseded_links: tuple[tuple[uuid.UUID, uuid.UUID], ...] = ()
     new_evidence_ids: tuple[uuid.UUID, ...] = ()
-    re_review: EvidenceRecord | None = None
     detail: str = ""
 
 
@@ -619,15 +623,17 @@ class ReviewReworkService:
         old_artifacts: Sequence[ArtifactRecord],
         new_artifacts: Sequence[ArtifactRecord],
         new_evidence: Sequence[EvidenceRecord],
-        re_review_outcome: str = "inconclusive",
-        re_review_verdict: str = "",
     ) -> ReworkOutcome:
-        """Record a rework: NEW rows supersede the OLD set (G2, R5/R6/R7).
+        """Record a rework: NEW rows supersede the OLD set (G2, R5).
 
-        Inserts the builder's NEW artifact rows + NEW proof evidence, records
-        the ``superseded_by`` links (old rows become historical, never
-        mutated), and writes the re-review row carrying
-        ``payload.rework_of = fail_review.id`` (I-5).  The rework MUST add new
+        Inserts the builder's NEW artifact rows + NEW proof evidence, then
+        records the ``superseded_by`` links (old rows become historical, never
+        mutated).  The rework ends at this handoff (design §3.3 REWORKING ->
+        RE_REVIEW: the builder writes "nothing new" at RE_REVIEW).  It writes
+        **no** ``kind='review'`` verdict row — the re-review VERDICT is a
+        separate disjoint-Reviewer act via :meth:`record_review`
+        (``rework_of = fail_review.id``, invariant-13 enforced there, carrying
+        ``payload.rework_of`` for G3 provenance).  The rework MUST add new
         ``test_result`` / ``file_revision`` evidence (I-4) or the plan fails
         closed.
         """
@@ -639,8 +645,6 @@ class ReviewReworkService:
             old_artifacts=old_artifacts,
             new_artifacts=new_artifacts,
             new_evidence=new_evidence,
-            re_review_outcome=re_review_outcome,
-            re_review_verdict=re_review_verdict,
         )
         if plan.code != RV_OK:
             return ReworkOutcome(plan.code, detail=plan.detail)
@@ -655,6 +659,9 @@ class ReviewReworkService:
         new_evidence_ids: list[uuid.UUID] = []
         for row in plan.new_evidence:
             try:
+                # The rework's new proof evidence (test_result / file_revision,
+                # kind != 'review') — no verdict row is written here, so the
+                # invariant-13 reviewer_builder_agents guard does not apply.
                 written = await evidence_record_dao.add_evidence(row, tenant_id=tenant_id, db=db)
                 new_evidence_ids.append(written.id)
             except ArtifactEvidenceClosedError as exc:
@@ -672,27 +679,11 @@ class ReviewReworkService:
             except ArtifactEvidenceClosedError:
                 # Already superseded: the link is idempotent, keep going.
                 superseded.append((old_id, new_id))
-        # The re-review row (R6): carries rework_of = the fail-row id.
-        re_review: EvidenceRecord | None = None
-        if plan.rework_review is not None:
-            try:
-                re_review = await evidence_record_dao.add_evidence(
-                    plan.rework_review, tenant_id=tenant_id, db=db
-                )
-            except ArtifactEvidenceClosedError as exc:
-                return ReworkOutcome(
-                    RV_INVALID_INPUT,
-                    new_artifact_ids=tuple(new_artifact_ids),
-                    superseded_links=tuple(superseded),
-                    new_evidence_ids=tuple(new_evidence_ids),
-                    detail=f"{exc.code}: {exc.detail}",
-                )
         return ReworkOutcome(
             RV_OK,
             new_artifact_ids=tuple(new_artifact_ids),
             superseded_links=tuple(superseded),
             new_evidence_ids=tuple(new_evidence_ids),
-            re_review=re_review,
         )
 
     async def record_execution_evidence(
