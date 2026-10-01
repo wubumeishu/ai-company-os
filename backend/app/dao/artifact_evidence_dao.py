@@ -396,6 +396,41 @@ class EvidenceRecordDAO(TenantScopedBaseDAO[EvidenceRecord]):
             deduped = [r for r in rows if not (r.id in seen or seen.add(r.id))]
             return deduped
 
+    async def latest_decision_row_for_subject(
+        self,
+        subject_ref: str,
+        *,
+        db=None,
+    ) -> EvidenceRecord | None:
+        """The LATEST ``kind='structured'`` completion decision row for one subject.
+
+        Bounded single-row read (design t_4185daed §5.3 / C5 + the card
+        t_e399386f design-conflict adjudication): the C5 decision rows chain
+        via ``payload.reverify_of`` (each row cites the previous decision row's
+        id for the same ``subject_ref``, None for the first), which EXCLUDES
+        them from the invariant-5 partial-unique index
+        ``uq_evidence_records_reverify`` — so repeated evaluations of one
+        subject append freely while staying chained, and the only correct
+        read is the newest row.  Tenant-scoped (the tenant_id filter is the
+        D6 scope-inject + the C3/I-7 read-side re-assertion); no business
+        logic, just the latest-row fetch the completion lane needs before it
+        chains a new decision row.
+        """
+        tenant_id = self._require_tenant_id()
+        stmt = (
+            select(EvidenceRecord)
+            .where(
+                EvidenceRecord.kind == "structured",
+                EvidenceRecord.subject_ref == subject_ref,
+            )
+            .order_by(EvidenceRecord.created_at.desc(), EvidenceRecord.id.desc())
+            .limit(1)
+        )
+        if tenant_id is not None:
+            stmt = stmt.where(EvidenceRecord.tenant_id == tenant_id)
+        async with self.session(db=db, readonly=True) as session_db:
+            return (await session_db.execute(stmt)).scalar_one_or_none()
+
     async def current_valid_review(
         self,
         task_id: uuid.UUID,
