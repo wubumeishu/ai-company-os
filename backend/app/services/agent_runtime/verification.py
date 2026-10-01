@@ -632,14 +632,25 @@ class TaskCompletionGate:
         self._completion = completion
 
     @staticmethod
-    def _fail_open(code: str, *, error_class: str | None = None) -> VerificationResult:
+    def _fail_closed(code: str, *, error_class: str | None = None) -> VerificationResult:
+        # Root §5: when the semantic completion gate itself ERRORED the task is
+        # UNVERIFIED, so the gate must not pass. This mirrors the deterministic
+        # verifier's fail-closed closed-code style (outcome="fail" + a distinct
+        # details["code"] + an actionable reason): the Task is NOT marked done.
         details: JsonObject = {
             "code": "completion_gate_error",
             "gate_error_code": code,
         }
         if error_class is not None:
             details["error_class"] = error_class
-        return VerificationResult(outcome="pass", details=details)
+        return VerificationResult(
+            outcome="fail",
+            reason=(
+                f"the semantic completion gate could not be evaluated "
+                f"({code}); completion is unverified"
+            ),
+            details=details,
+        )
 
     async def verify(
         self,
@@ -652,7 +663,7 @@ class TaskCompletionGate:
             model_id = uuid.UUID(context.model_id)
             agent_id = uuid.UUID(context.agent_id or "")
         except (TypeError, ValueError) as exc:
-            return self._fail_open(
+            return self._fail_closed(
                 "invalid_completion_gate_identity",
                 error_class=type(exc).__name__,
             )
@@ -665,7 +676,7 @@ class TaskCompletionGate:
             or not model.enabled
             or model.tenant_id not in {None, tenant_id}
         ):
-            return self._fail_open("completion_gate_model_unavailable")
+            return self._fail_closed("completion_gate_model_unavailable")
 
         payload = {
             "original_run_goal": context.goal,
@@ -688,14 +699,14 @@ class TaskCompletionGate:
                 supports_vision=False,
             )
         except Exception as exc:
-            return self._fail_open(
+            return self._fail_closed(
                 "completion_gate_call_failed",
                 error_class=type(exc).__name__,
             )
 
         decision = _parse_completion_decision(step.content)
         if decision is None:
-            return self._fail_open("invalid_completion_gate_output")
+            return self._fail_closed("invalid_completion_gate_output")
         if decision["verdict"] == "pass":
             return VerificationResult(
                 outcome="pass",

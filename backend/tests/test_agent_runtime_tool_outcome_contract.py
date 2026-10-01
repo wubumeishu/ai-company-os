@@ -967,7 +967,7 @@ async def test_verifier_uses_invocation_context_without_checkpoint_registry() ->
 
 
 @pytest.mark.asyncio
-async def test_completion_gate_invalid_output_fails_open() -> None:
+async def test_completion_gate_invalid_output_fails_closed() -> None:
     tenant_id = uuid.uuid4()
     run_id = uuid.uuid4()
     model_id = uuid.uuid4()
@@ -1008,11 +1008,14 @@ async def test_completion_gate_invalid_output_fails_open() -> None:
 
     result = await gate.verify(_state(tenant_id, run_id), context, "report result")
 
-    assert result.outcome == "pass"
+    # Root §5: an unparseable gate output means the task is UNVERIFIED, so the
+    # gate must fail closed (the Task must not be marked done).
+    assert result.outcome == "fail"
     assert result.details == {
         "code": "completion_gate_error",
         "gate_error_code": "invalid_completion_gate_output",
     }
+    assert "invalid_completion_gate_output" in (result.reason or "")
 
 
 @pytest.mark.asyncio
