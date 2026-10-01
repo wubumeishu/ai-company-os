@@ -21,6 +21,7 @@ from app.models.artifact_evidence import ArtifactRecord, EvidenceRecord  # noqa:
 from app.models.audit import ApprovalRequest, AuditLog, ChatMessage, EnterpriseInfo  # noqa: F401
 from app.models.channel_config import ChannelConfig  # noqa: F401
 from app.models.chat_session import ChatSession  # noqa: F401
+from app.models.delivery_record import DeliveryRecord  # noqa: F401
 from app.models.experience import ExperienceEntry  # noqa: F401
 from app.models.experience_reference import ExperienceReference  # noqa: F401
 from app.models.gateway_message import GatewayMessage  # noqa: F401
