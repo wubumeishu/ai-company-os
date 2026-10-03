@@ -49,8 +49,9 @@ chain's hops and their proving tests:
   execution; NEW v2 rows + superseded_by → disjoint re-review, G2
   stale-approve drop-out + G3 provenance walk on the live ledger) →
   ``test_rework_run_and_disjoint_rereview``;
-- hop the disjoint reviewer's OWN Run on the review task (its
-  execution-linked artifact + verdict, CP in-scope for the review task) →
+- hop the reviewer task's OWN ledger rows (its execution-linked artifact is
+  superseded by the reviewer's sealed draft + a user-captured approving
+  verdict, CP in-scope for the review task) →
   ``test_reviewer_run_produces_review_task_ledger_rows``;
 - hop Completion (CP_OK drives the SINGLE owning write site; COMPLETED
   exactly once; idempotent re-call; Root §5: Task.status / final_answer /
@@ -953,6 +954,10 @@ class _CHAINState:
     c5_task: Any
     c5_first: Any
     c5_second: Any
+    # hop 8 (Delivery):
+    delivery_record: Any
+    # negatives (fail-closed):
+    gate_run_id: Any  # the gate-error run's id (run_failed terminal)
 
     def __init__(self) -> None:
         self.build_run_id = None
@@ -973,6 +978,8 @@ class _CHAINState:
         self.c5_task = None
         self.c5_first = None
         self.c5_second = None
+        self.delivery_record = None
+        self.gate_run_id = None
 
 
 _CHAIN = _CHAINState()
@@ -1479,4 +1486,577 @@ async def test_rework_run_and_disjoint_rereview(db_factory: async_sessionmaker) 
             assert (_CHAIN.v1.id, _CHAIN.v2.id) in prov.superseded_pairs, "G3: the supersession link walks"
             assert prov.re_review is not None and prov.re_review.id == _CHAIN.r3_rereview.id, "G3: the re-review row walks"
             assert prov.new_evidence, "G3: the rework's proof evidence walks"
+
+
+# ---------------------------------------------------------------------------
+# HOP 4b (the reviewer task's OWN ledger rows -> its CP scope): the
+# reviewer's execution-linked artifact goes superseded by the reviewer's
+# own draft (the reviewer's proof) and the user-captured approving verdict
+# seals that draft.  A user verdict is vacuously independent (G1 read-side
+# mirror: a human is never in an agent builder set) — the reviewer task's
+# CT turns CP_OK on exactly these rows.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_reviewer_run_produces_review_task_ledger_rows(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Hop Reviewer-task ledger rows: the disjoint
+    reviewer's OWN Run on the review task (the real frozen spine, the same
+    deterministic port) mints its execution-linked artifact; the reviewer's
+    current proof is the DRAFT they authored + the user-captured approving
+    verdict (sealing it one-way, R3) — so the review task's CT satisfies
+    |A_c(T)|>=1 + SEALED + current-valid approving review with NO agent
+    verdict (a user row is vacuously independent, G1 read-side mirror)."""
+    await _tenant_ctx_factory(db_factory)
+    import hashlib
+
+    from app.dao.artifact_evidence_dao import artifact_record_dao
+    from app.dao.base import tenant_context
+    from app.models.agent import Agent
+    from app.models.agent_tool_execution import AgentToolExecution
+    from app.models.artifact_evidence import ArtifactRecord
+    from app.models.task import Task
+    from app.models.user import User
+    from app.models.workspace import WorkspaceFileRevision
+    from app.services.review_rework_service import RV_OK, ReviewReworkService
+    from app.services.task_execution_service import task_execution_service
+
+    tenant = _SEED.tenant_a.id
+    port, calls = _make_deterministic_port(path="P4_E2E_REVIEW.md", label="review")
+
+    # Enqueue the reviewer's OWN Run on the review task (the same frozen
+    # Phase-2E gate; the build task is already done so the REV-2 edge is met).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            task_row = (await sess.execute(select(Task).where(Task.id == _SEED.review_task.id))).scalar_one()
+            agent_row = (
+                await sess.execute(select(Agent).where(Agent.id == _SEED.reviewer.id))
+            ).scalar_one()
+            user_row = (await sess.execute(select(User).where(User.id == _SEED.user_a.id))).scalar_one()
+            out = await task_execution_service.execute(sess, task=task_row, agent=agent_row, current_user=user_row)
+    assert out.run_id is not None, f"the gate must enqueue the reviewer's run: {out.state} {out.derived_state}"
+    _CHAIN.reviewer_run_id = out.run_id
+
+    terminal = await _drive_run(out.run_id, port, "review")
+    assert terminal == "run_completed", f"reviewer run did not complete: {terminal}"
+    assert "model" in calls and "gate" in calls, "the deterministic port drove the reviewer run (no real LLM)"
+
+    # Settlement: the real handler flipped the review task to done.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            assert (
+                await sess.execute(select(Task.status).where(Task.id == _SEED.review_task.id))
+            ).scalar_one() == "done"
+
+    # The reviewer's execution-linked artifact + the real tool-path revision.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            xrev = (
+                await sess.execute(
+                    select(AgentToolExecution)
+                    .where(
+                        AgentToolExecution.run_id == out.run_id,
+                        AgentToolExecution.tool_name == "write_file",
+                        AgentToolExecution.status == "succeeded",
+                    )
+                )
+            ).scalars().all()
+            assert len(xrev) == 1, "the reviewer run's single write_file execution"
+            _CHAIN.x_review = xrev[0]
+            rev_rows = (
+                await sess.execute(
+                    select(WorkspaceFileRevision)
+                    .where(
+                        WorkspaceFileRevision.scope_type == "agent",
+                        WorkspaceFileRevision.scope_id == _SEED.reviewer.id,
+                        WorkspaceFileRevision.path == "P4_E2E_REVIEW.md",
+                    )
+                    .order_by(WorkspaceFileRevision.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().all()
+            assert rev_rows, "the real tool path persisted the reviewer's file revision"
+
+    # The ledger lane: the reviewer's execution-linked artifact is sealed
+    # one-way (R3) by the user-captured approving verdict (a user verdict is
+    # vacuously independent, G1 read-side mirror: a human is never in an
+    # agent builder set — so the review task's CT turns CP_OK on exactly
+    # these rows).
+    content_hash = hashlib.sha256(b"review deterministic tool-path proof\n").hexdigest()
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            xrev_row = (
+                await sess.execute(select(AgentToolExecution).where(AgentToolExecution.id == _CHAIN.x_review.id))
+            ).scalar_one()
+            v_rev = ArtifactRecord(
+                id=uuid.uuid4(),
+                task_id=_SEED.review_task.id,
+                project_id=_SEED.project_main.id,
+                execution_id=xrev_row.id,
+                agent_id=_SEED.reviewer.id,
+                type="file",
+                title="P4_E2E_REVIEW.md",
+                storage_scheme="workspace_path",
+                storage_ref="P4_E2E_REVIEW.md",
+                content_hash=content_hash,
+                revision_ref=str(rev_rows[0].id),
+                tenant_id=tenant,
+            )
+            written_rev = await artifact_record_dao.add_artifact(v_rev, tenant_id=tenant, db=sess)
+            assert written_rev.seal_status == "DRAFT"
+            _CHAIN.v_reviewer = written_rev
+
+    # The user-captured approving verdict: seals the reviewer artifact
+    # one-way (R3); a user row is vacuously independent (G1 read-side
+    # mirror), so no agent G1 collision on the review task.
+    svc = ReviewReworkService()
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            current = await artifact_record_dao.list_by_task(_SEED.review_task.id, db=sess, current_only=True)
+            assert [a.id for a in current] == [written_rev.id], "the reviewer artifact is the review task's current set"
+            r4 = await svc.record_review(
+                sess,
+                task_id=_SEED.review_task.id,
+                tenant_id=tenant,
+                outcome="pass",
+                reviewer_agent_id=None,
+                reviewer_user_id=_SEED.user_a.id,
+                builder_agent_ids=BUILDERS,
+                current_artifacts=current,
+                cited_artifact_ids=[written_rev.id],
+                verdict="review accepted",
+            )
+            assert r4.code == RV_OK, r4
+            _CHAIN.user_review_row = r4.evidence
+            assert r4.sealed_artifact_ids == (written_rev.id,), "the APPROVE sealed the reviewer artifact one-way (R3)"
+
+    # Committed re-read: the execution link is durable + the artifact is SEALED.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            rev_row = (
+                await sess.execute(select(ArtifactRecord).where(ArtifactRecord.id == written_rev.id))
+            ).scalar_one()
+            assert rev_row.execution_id == _CHAIN.x_review.id, "the reviewer artifact is execution-linked"
+            assert rev_row.seal_status == "SEALED", "the user APPROVE sealed the reviewer artifact"
+
+
+# ---------------------------------------------------------------------------
+# HOP 7 (Completion): a CP_OK evaluation drives the SINGLE owning write
+# site -> Project.status='COMPLETED' exactly once (the idempotent re-call
+# is a no-op write).  Root §5: Task.status / final_answer / the gate
+# verdict are NOT completion inputs — the lane reads ONLY the ledger.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_completion_cp_ok_completes_project_exactly_once(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Hop Completion: the completion lane's CP
+    evaluation (CT per in-scope task + CW per delivery-milestone WP) is
+    CP_OK -> the SINGLE owning write site publishes Project.status=
+    'COMPLETED' exactly once; the idempotent re-call recomputes CP_OK but
+    does NOT re-publish (terminal status outside the executable set).  The
+    C5 decision rows chain via payload.reverify_of (one row per evaluation).
+    Root §5 proof (C5): Task.status / final_answer / the gate verdict are
+    NEVER completion inputs — the orphan project's pending task + zero
+    runs evaluate CP_NO_WORK (a ledger fact, not a Task.status fact)."""
+    await _tenant_ctx_factory(db_factory)
+    from app.dao.artifact_evidence_dao import evidence_record_dao
+    from app.dao.base import tenant_context
+    from app.models.artifact_evidence import EvidenceRecord
+    from app.models.project import Project
+    from app.services.completion_service import (
+        CP_NO_WORK,
+        CP_OK,
+        EvaluationActor,
+        completion_service,
+    )
+
+    tenant = _SEED.tenant_a.id
+    actor = EvaluationActor(agent_id=_SEED.reviewer.id)
+
+    # The task-scoped C5 row first (one row, chained by the CP rows below):
+    # the lane proves per-task CT is CP_OK with the reviewer's re-review.
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            t1 = await completion_service.evaluate_task(
+                sess,
+                task_id=_SEED.build_task.id,
+                tenant_id=tenant,
+                actor=actor,
+                builder_agent_ids=BUILDERS,
+            )
+    assert t1.code == CP_OK, f"the build task's CT is CP_OK: {t1.code} {t1.detail}"
+    _CHAIN.c5_task = t1.decision
+    assert t1.decision is not None
+
+    # The fresh CP_OK evaluation publishes COMPLETED exactly once; the
+    # re-call recomputes CP_OK but does NOT re-publish (terminal status).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            first = await completion_service.evaluate_project(
+                sess,
+                project_id=_SEED.project_main.id,
+                tenant_id=tenant,
+                actor=actor,
+                builder_agent_ids=BUILDERS,
+            )
+    assert first.code == CP_OK, f"the fresh CP evaluation: {first.code} {first.detail}"
+    assert first.project_completed is True, "the fresh CP_OK published COMPLETED"
+    assert first.project_status == "COMPLETED"
+    _CHAIN.c5_first = first.decision
+    assert first.decision is not None
+    first_payload = first.decision.payload
+    assert first_payload.get("outcome") == CP_OK
+    assert "reverify_of" not in first_payload, "the first CP row starts the C5 chain"
+
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            second = await completion_service.evaluate_project(
+                sess,
+                project_id=_SEED.project_main.id,
+                tenant_id=tenant,
+                actor=actor,
+                builder_agent_ids=BUILDERS,
+            )
+    assert second.code == CP_OK, f"the re-call recomputes CP_OK: {second.code} {second.detail}"
+    assert second.project_completed is False, "the re-call did NOT re-publish (no second write)"
+    assert second.project_status == "COMPLETED", "the terminal status is unchanged"
+    _CHAIN.c5_second = second.decision
+    second_payload = second.decision.payload if second.decision is not None else None
+    assert second_payload is not None and "reverify_of" in second_payload, (
+        "the re-call's C5 row chains off the first"
+    )
+    assert second_payload["reverify_of"] == str(first.decision.id)
+
+    # Committed re-reads: the DB facts (status flipped ONCE; C5 chain rows;
+    # the task row's status is a settlement fact, not a completion input).
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            proj = (
+                await sess.execute(select(Project).where(Project.id == _SEED.project_main.id))
+            ).scalar_one()
+            assert proj.status == "COMPLETED", "the DB fact: COMPLETED persisted"
+            # The C5 chain: the fresh CP_OK row + the re-call's chained row,
+            # both outcome CP_OK, one row per evaluation (subject-scoped).
+            subject = f"project://{_SEED.project_main.id}"
+            rows = list(
+                await evidence_record_dao.list_scoped(
+                    extra_filters=[
+                        EvidenceRecord.kind == "structured",
+                        EvidenceRecord.subject_ref == subject,
+                    ],
+                    db=sess,
+                )
+            )
+            cp_rows = [r for r in rows if r.payload.get("outcome") == CP_OK]
+            assert len(rows) == 2, f"exactly two project-scope C5 rows (one per evaluation): {len(rows)}"
+            assert len(cp_rows) == 2, f"both C5 rows are the fresh CP_OK + the chained re-call: {len(cp_rows)}"
+
+    # Root §5 (C5): the orphan project's in-scope task is PENDING with ZERO
+    # runs — completion is ledger-gated (CP_NO_WORK: no sealed artifact + no
+    # approving review), NOT Task.status / final_answer / gate-verdict
+    # gated.  This is the "Task.status is not a completion input" proof.
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            orphan = await completion_service.evaluate_project(
+                sess,
+                project_id=_SEED.project_orphan.id,
+                tenant_id=tenant,
+                actor=actor,
+                builder_agent_ids=BUILDERS,
+            )
+    assert orphan.code == CP_NO_WORK, f"the orphan project has no ledger proof: {orphan.code} {orphan.detail}"
+    assert orphan.project_completed is False, "a non-CP_OK evaluation publishes NOTHING"
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            orphan_proj = (
+                await sess.execute(select(Project).where(Project.id == _SEED.project_orphan.id))
+            ).scalar_one()
+            assert orphan_proj.status == "EXECUTING", "the orphan project is UNTOUCHED (no write)"
+
+
+# ---------------------------------------------------------------------------
+# HOP 8 (Delivery): a delivery record is written citing ONLY the SEALED +
+# current-valid-approving artifact set (the re-check happens at write time,
+# never re-derived from Task.status / final_answer / the gate verdict); a
+# non-CP_OK scope writes NO record; the re-delivery is idempotent.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_delivery_cites_only_sealed_approving(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Hop Delivery: DeliveryService.deliver over
+    the CP_OK main project writes the ONE delivery record citing ONLY the
+    SEALED + current-valid-approving artifact set (re-checked at write
+    time, C-D1/C-D3); the re-delivery returns the existing terminal record
+    (idempotent, no second write); the non-CP_OK orphan project writes NO
+    record (CD_NOT_COMPLETED, fail-closed at the gate read)."""
+    await _tenant_ctx_factory(db_factory)
+    from app.dao.base import tenant_context
+    from app.dao.delivery_record_dao import delivery_record_dao
+    from app.models.project import Project
+    from app.services.completion_service import EvaluationActor
+    from app.services.delivery_service import CD_NOT_COMPLETED, CD_OK, delivery_service
+
+    tenant = _SEED.tenant_a.id
+    actor = EvaluationActor(agent_id=_SEED.reviewer.id)
+    scope_main = f"project://{_SEED.project_main.id}"
+    scope_orphan = f"project://{_SEED.project_orphan.id}"
+
+    # The fresh CP_OK delivery: cites ONLY the SEALED + approving set.
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            res = await delivery_service.deliver(
+                sess,
+                scope_ref=scope_main,
+                tenant_id=tenant,
+                actor=actor,
+                destination_kind="project_record",
+                artifact_ids=None,
+                builder_agent_ids=BUILDERS,
+            )
+    assert res.code == CD_OK, f"the fresh delivery: {res.code} {res.detail}"
+    assert res.record is not None and not res.already_delivered
+    assert res.cited_ids is not None, "the cited set resolved against the ledger"
+    # The record's provenance fields are immutable at the PENDING write
+    # (f073 model docstring): cp_decision_row_id + cited_review_row_ids +
+    # the SEALED+approved artifact ids are the G3 walkable chain.
+    rec = res.record
+    assert rec.cp_decision_row_id is not None, "the record cites the C5 decision row"
+    assert rec.cited_review_row_ids, "the record cites the approving review rows"
+    assert set(res.cited_ids) == {str(_CHAIN.v2.id), str(_CHAIN.v_reviewer.id)}, (
+        "the record cites ONLY the current-valid SEALED + approving set: "
+        f"{sorted(res.cited_ids)} vs expected {{v2, v_reviewer}}"
+    )
+    # destination_kind=project_record -> the lane owns the terminal state
+    # (the record IS the destination, C-D3): DELIVERED + executed_at.
+    assert rec.state == "DELIVERED", "project_record is terminal at the decision (C-D3)"
+    assert rec.executed_at is not None, "the terminal state stamped executed_at"
+    _CHAIN.delivery_record = rec
+
+    # Idempotent re-delivery: returns the existing terminal record, appends
+    # NOTHING (the C-D3 recall deferral — no second row).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            res2 = await delivery_service.deliver(
+                sess,
+                scope_ref=scope_main,
+                tenant_id=tenant,
+                actor=actor,
+                destination_kind="project_record",
+                artifact_ids=None,
+                builder_agent_ids=BUILDERS,
+            )
+    assert res2.code == CD_OK and res2.already_delivered, "the re-delivery is idempotent"
+    assert res2.record is not None and res2.record.id == rec.id, "the SAME record, no second row"
+
+    # Committed re-read: exactly ONE delivery record for the main project.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            rows = await delivery_record_dao.list_by_scope(scope_main, db=sess)
+            assert [r.id for r in rows] == [rec.id], "ONE delivery record for the main project"
+
+    # The non-CP_OK scope writes NO record: the orphan project's in-scope
+    # task is PENDING with zero runs -> CP_NO_WORK -> CD_NOT_COMPLETED,
+    # nothing written to delivery_records (fail-closed at the gate read).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            res_orphan = await delivery_service.deliver(
+                sess,
+                scope_ref=scope_orphan,
+                tenant_id=tenant,
+                actor=actor,
+                destination_kind="project_record",
+                artifact_ids=None,
+                builder_agent_ids=BUILDERS,
+            )
+    assert res_orphan.code == CD_NOT_COMPLETED, f"the non-CP_OK scope: {res_orphan.code} {res_orphan.detail}"
+    assert res_orphan.record is None, "NO record on a non-CP_OK scope"
+    assert res_orphan.cited_ids is None
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            orphan_rows = await delivery_record_dao.list_by_scope(scope_orphan, db=sess)
+            assert orphan_rows == [], "the gate rejection wrote nothing to delivery_records"
+            orphan_proj = (
+                await sess.execute(select(Project).where(Project.id == _SEED.project_orphan.id))
+            ).scalar_one()
+            assert orphan_proj.status == "EXECUTING", "the orphan project is UNTOUCHED"
+
+
+# ---------------------------------------------------------------------------
+# NEGATIVES (fail-closed, the card's requirement 7 — at least one negative
+# assertion, here three, each a distinct closed code on its own boundary):
+#   1. cross-tenant delivery -> CD_NOT_COMPLETED (CP_TENANT_MISMATCH at
+#      the gate read, BEFORE any write, in either tenant);
+#   2. builder-authored kind='review' verdict -> RV_REVIEW_NOT_INDEPENDENT
+#      (invariant 13 / G4 at verdict time, the F1 boundary re-asserted live);
+#   3. TaskCompletionGate ERROR -> the Run is terminal-failed and the Task
+#      is NOT marked done (Root §5 / t_56fbca2e fail-closed fix).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cross_tenant_blocked_before_any_write(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Negative (cross-tenant): a tenant-B user
+    delivering the tenant-A main project (or evaluating it via the
+    completion lane) fails CP_TENANT_MISMATCH at the gate read, BEFORE any
+    write — no delivery record, no C5 decision row, in either tenant."""
+    await _tenant_ctx_factory(db_factory)
+    from app.dao.artifact_evidence_dao import evidence_record_dao
+    from app.dao.base import tenant_context
+    from app.dao.delivery_record_dao import delivery_record_dao
+    from app.models.artifact_evidence import EvidenceRecord
+    from app.models.project import Project
+    from app.services.completion_service import EvaluationActor
+    from app.services.delivery_service import CD_NOT_COMPLETED, delivery_service
+
+    # The cross-tenant delivery: tenant B delivers tenant A's project — the
+    # gate's tenant-scoped read of the foreign subject fails BEFORE any
+    # write (CP_TENANT_MISMATCH -> CD_NOT_COMPLETED, Root §5).
+    with tenant_context(_SEED.tenant_b.id):
+        async with db_factory() as sess, sess.begin():
+            res = await delivery_service.deliver(
+                sess,
+                scope_ref=f"project://{_SEED.project_main.id}",
+                tenant_id=_SEED.tenant_b.id,
+                actor=EvaluationActor(user_id=_SEED.user_b.id),
+                destination_kind="project_record",
+                artifact_ids=None,
+                builder_agent_ids=None,
+            )
+    assert res.code == CD_NOT_COMPLETED, f"cross-tenant delivery is fail-closed: {res.code} {res.detail}"
+    assert res.record is None, "NO delivery record written for a foreign tenant's scope"
+    # In tenant B's own ledger: zero delivery rows for the foreign scope;
+    # zero C5 decision rows (the gate failed BEFORE the lane's C5 append).
+    with tenant_context(_SEED.tenant_b.id):
+        async with db_factory() as sess:
+            rows_b = await delivery_record_dao.list_by_scope(
+                f"project://{_SEED.project_main.id}", db=sess
+            )
+            assert rows_b == [], "tenant B wrote NOTHING to its own delivery ledger"
+            c5_b = list(
+                await evidence_record_dao.list_scoped(
+                    extra_filters=[
+                        EvidenceRecord.kind == "structured",
+                        EvidenceRecord.subject_ref == f"project://{_SEED.project_main.id}",
+                    ],
+                    db=sess,
+                )
+            )
+            assert c5_b == [], "the cross-tenant gate read appended NO C5 row in tenant B"
+    # The owning project is UNTOUCHED by the foreign attempt.
+    with tenant_context(_SEED.tenant_a.id):
+        async with db_factory() as sess:
+            main_proj = (
+                await sess.execute(select(Project).where(Project.id == _SEED.project_main.id))
+            ).scalar_one()
+            assert main_proj.status == "COMPLETED", "the owning project's state is UNCHANGED by the foreign attempt"
+
+
+@pytest.mark.asyncio
+async def test_builder_review_verdict_rejected_live(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Negative (invariant-13 / G4 at verdict time,
+    the F1 boundary re-asserted live): the builder's OWN kind='review'
+    verdict over its current artifact set is rejected by the lane's guard
+    (RV_REVIEW_NOT_INDEPENDENT) AND by the DAO's backstop (the closed code
+    propagates) — NO row is persisted; the disjoint reviewer remains the
+    only verdict author."""
+    await _tenant_ctx_factory(db_factory)
+    from app.dao.artifact_evidence_dao import artifact_record_dao, evidence_record_dao
+    from app.dao.base import tenant_context
+    from app.services.review_rework_service import RV_REVIEW_NOT_INDEPENDENT, ReviewReworkService
+
+    tenant = _SEED.tenant_a.id
+    svc = ReviewReworkService()
+    # The builder attempts a self-verdict over its OWN current set (v2):
+    # the lane guard rejects it BEFORE any write (G1 at verdict time).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            from app.dao.artifact_evidence_dao import artifact_record_dao
+
+            current = await artifact_record_dao.list_by_task(_SEED.build_task.id, db=sess, current_only=True)
+            rogue = await svc.record_review(
+                sess,
+                task_id=_SEED.build_task.id,
+                tenant_id=tenant,
+                outcome="pass",
+                reviewer_agent_id=_SEED.builder.id,
+                reviewer_user_id=None,
+                builder_agent_ids=BUILDERS,
+                current_artifacts=current,
+                cited_artifact_ids=[a.id for a in current],
+                verdict="builder self-review must be rejected",
+            )
+    assert rogue.code == RV_REVIEW_NOT_INDEPENDENT, f"the builder's verdict is rejected: {rogue.code}"
+    assert rogue.evidence is None, "the rejected verdict planned NO row (the guard failed before any write)"
+    # Committed re-read: the ONLY kind='review' rows are the disjoint
+    # reviewer's (3: pass(v1) + fail(v1) + pass(v2 rework_of)) + the user's
+    # (1) — ZERO builder-authored rows.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            verdicts = await evidence_record_dao.list_reviews_for_task(_SEED.build_task.id, db=sess)
+            assert all(
+                v.created_by_agent == _SEED.reviewer.id or v.created_by_user is not None
+                for v in verdicts
+            ), "every verdict row is the disjoint reviewer's OR a user's — zero builder-authored"
+            assert not any(v.created_by_agent == _SEED.builder.id for v in verdicts), (
+                "F1/G4: NO builder-authored kind='review' row persisted"
+            )
+
+
+@pytest.mark.asyncio
+async def test_gate_error_fails_closed_task_not_done(db_factory: async_sessionmaker) -> None:
+    """[DB-only + mock agent] Negative (Root §5 / t_56fbca2e fail-closed
+    fix): a TaskCompletionGate provider ERROR (the deterministic port with
+    gate_raise=True) makes the Run terminal-FAILED and the Task NOT marked
+    done — the fail-closed path is the ONLY outcome on a gate error (never
+    a pass verdict, never a COMPLETED projection).  The gate task's
+    project stays in its pre-execution status; no delivery record is ever
+    written for it."""
+    await _tenant_ctx_factory(db_factory)
+    from app.dao.base import tenant_context
+    from app.models.agent import Agent
+    from app.models.agent_run_event import AgentRunEvent
+    from app.models.project import Project
+    from app.models.task import Task
+    from app.models.user import User
+    from app.services.task_execution_service import task_execution_service
+
+    tenant = _SEED.tenant_a.id
+    port, calls = _make_deterministic_port(path="P4_E2E_GATE_FAIL.md", label="gate", gate_raise=True)
+
+    # Enqueue the gate task's Run (the same frozen Phase-2E gate).
+    with tenant_context(tenant):
+        async with db_factory() as sess, sess.begin():
+            task_row = (await sess.execute(select(Task).where(Task.id == _SEED.gate_task.id))).scalar_one()
+            agent_row = (
+                await sess.execute(select(Agent).where(Agent.id == _SEED.builder.id))
+            ).scalar_one()
+            user_row = (await sess.execute(select(User).where(User.id == _SEED.user_a.id))).scalar_one()
+            out = await task_execution_service.execute(sess, task=task_row, agent=agent_row, current_user=user_row)
+    assert out.run_id is not None, f"the gate must enqueue: {out.state} {out.derived_state}"
+    _CHAIN.gate_run_id = out.run_id
+
+    # Drive the run: the gate call itself raises -> the Run is terminal-
+    # FAILED (never completed; the fail-closed path, Root §5).
+    terminal = await _drive_run(out.run_id, port, "gatefail")
+    assert terminal == "run_failed", f"the gate error must fail the Run: {terminal}"
+    assert "gate" in calls, "the deterministic gate port was the one that raised"
+
+    # Committed re-reads: the Task is NOT marked done + the Run is FAILED.
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            task_status = (
+                await sess.execute(select(Task.status).where(Task.id == _SEED.gate_task.id))
+            ).scalar_one()
+            assert task_status != "done", f"a gate-error Run must NOT mark the task done: {task_status}"
+            ev = (
+                await sess.execute(
+                    select(AgentRunEvent.event_type).where(
+                        AgentRunEvent.run_id == out.run_id,
+                        AgentRunEvent.event_type.in_(("run_completed", "run_failed", "run_cancelled")),
+                    )
+                )
+            ).scalars().all()
+            assert "run_failed" in ev, f"the terminal event is run_failed: {ev}"
+    # The gate task's project stays in its pre-execution status (no
+    # COMPLETED projection on a failed gate):
+    with tenant_context(tenant):
+        async with db_factory() as sess:
+            proj = (
+                await sess.execute(select(Project).where(Project.id == _SEED.project_gate.id))
+            ).scalar_one()
+            assert proj.status != "COMPLETED", "the gate-error project is NEVER completed"
 
