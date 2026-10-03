@@ -17,9 +17,11 @@ from app.models.agent_run_command import AgentRunCommand  # noqa: F401
 from app.models.agent_run_event import AgentRunEvent  # noqa: F401
 from app.models.agent_tool_execution import AgentToolExecution  # noqa: F401
 from app.models.analysis import AnalysisFinding, AnalysisRun, ProjectKnowledge  # noqa: F401
+from app.models.artifact_evidence import ArtifactRecord, EvidenceRecord  # noqa: F401
 from app.models.audit import ApprovalRequest, AuditLog, ChatMessage, EnterpriseInfo  # noqa: F401
 from app.models.channel_config import ChannelConfig  # noqa: F401
 from app.models.chat_session import ChatSession  # noqa: F401
+from app.models.delivery_record import DeliveryRecord  # noqa: F401
 from app.models.experience import ExperienceEntry  # noqa: F401
 from app.models.experience_reference import ExperienceReference  # noqa: F401
 from app.models.gateway_message import GatewayMessage  # noqa: F401

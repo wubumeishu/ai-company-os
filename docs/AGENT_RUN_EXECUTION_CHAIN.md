@@ -237,4 +237,11 @@ Broken/missing (outside the main spine, for the Phase 1 report):
 - Supervision-task scheduler: storage + manual trigger only.
 - Independent Review -> Rework loop: does not exist yet.
 - Project entity / Project Intake: does not exist yet.
-- `TaskCompletionGate` fail-open behavior is a risk, not a gap.
+- `TaskCompletionGate` no longer fails open: when the semantic gate
+  itself errors (model unavailable / gate-call failure / unparseable
+  output), `verify()` now returns a fail-closed `outcome="fail"`
+  (distinct `details.code="completion_gate_error"` + actionable reason)
+  instead of the inherited `outcome="pass"`; the Task is NOT marked
+  done. Closes the inherited fail-open asymmetry flagged in the Phase 4
+  audit (PHASE_4_AUDIT_REPORT_T15e05452) and the Phase 3 residual-risk
+  G8/D-3 ("known inherited weakness", not papered over here).
