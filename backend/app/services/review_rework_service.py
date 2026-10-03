@@ -755,7 +755,17 @@ class ReviewReworkService:
             return None
         artifacts = await artifact_record_dao.list_by_task(task_id, db=db, current_only=False)
         reviews = await evidence_record_dao.list_reviews_for_task(task_id, db=db)
-        evidence = [r for r in reviews]
+        # The G3 walk's new-proof source is the task's PROOF evidence rows
+        # (test_result / file_revision) — NOT the kind='review' verdict rows.
+        # (The prior ``evidence = [r for r in reviews]`` handed the verdict
+        # rows to the pure walk, whose proof-kind filter can never match a
+        # review row: ReworkProvenance.new_evidence was structurally empty.)
+        # The task-scoped read bounds the input; the KIND + current-set
+        # filter stays owned by the pure :func:`rework_provenance` walk.
+        evidence = await evidence_record_dao.list_scoped(
+            extra_filters=[EvidenceRecord.task_id == task_id],
+            db=db,
+        )
         return rework_provenance(
             fail_review=fail,
             artifacts=artifacts,
