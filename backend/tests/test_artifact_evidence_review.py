@@ -523,6 +523,79 @@ def test_rework_with_no_new_artifacts_fails_closed() -> None:
     assert plan.code == RV_NO_CURRENT_ARTIFACTS
 
 
+def test_rework_new_evidence_kind_closed_rejects_review_row() -> None:
+    """I-4 kind-closure / invariant-13 (G4): the rework-proof lane is CLOSED
+    to verdict kinds.  A caller-supplied ``kind='review'`` row in
+    ``new_evidence`` is rejected at the plan tier (``plan_rework`` ->
+    RV_INVALID_INPUT): the verdict kind must not ride the rework lane — it
+    belongs to the disjoint reviewer's ``record_review(rework_of=fail.id)``
+    act.  A mix of proof + verdict is rejected too (the closed set is
+    test_result / file_revision ONLY), while a proof-only rework stays RV_OK."""
+    old = _artifact(ref="/repo/old.txt", sealed=True)
+    fail = _review(outcome="fail", artifact=old, payload={"required_changes": ["fix x"]})
+    new = _artifact(ref="/repo/old.txt", current=True)
+    proof = EvidenceRecord(
+        id=uuid.uuid4(),
+        tenant_id=TENANT_ID,
+        task_id=TASK_ID,
+        artifact_id=new.id,
+        execution_id=EXEC_ID,
+        kind="file_revision",
+        outcome="pass",
+        subject_ref=f"file://{TASK_ID}",
+        payload={"tests_total": 1, "tests_passed": 1},
+        created_by_agent=BUILDER_A,
+        created_at=NOW,
+    )
+    builder_verdict = EvidenceRecord(
+        id=uuid.uuid4(),
+        tenant_id=TENANT_ID,
+        task_id=TASK_ID,
+        artifact_id=new.id,
+        kind="review",
+        outcome="pass",
+        subject_ref=f"evidence://review/{TASK_ID}",
+        payload={"rework_of": str(fail.id), "verdict": "self-approved"},
+        created_by_agent=BUILDER_A,
+        created_at=NOW,
+    )
+    # A kind='review' row alongside genuine proof is rejected at the plan tier.
+    mixed = plan_rework(
+        task_id=TASK_ID,
+        tenant_id=TENANT_ID,
+        builder_agent_id=BUILDER_A,
+        fail_review=fail,
+        old_artifacts=[old],
+        new_artifacts=[new],
+        new_evidence=[proof, builder_verdict],
+    )
+    assert mixed.code == RV_INVALID_INPUT
+    assert "kind='review'" in mixed.detail
+    # ... and so is a verdict-only rework (the I-4 minimum is not met either).
+    verdict_only = plan_rework(
+        task_id=TASK_ID,
+        tenant_id=TENANT_ID,
+        builder_agent_id=BUILDER_A,
+        fail_review=fail,
+        old_artifacts=[old],
+        new_artifacts=[new],
+        new_evidence=[builder_verdict],
+    )
+    assert verdict_only.code == RV_INVALID_INPUT
+    # The normal rework (test_result / file_revision proof only) still succeeds.
+    ok = plan_rework(
+        task_id=TASK_ID,
+        tenant_id=TENANT_ID,
+        builder_agent_id=BUILDER_A,
+        fail_review=fail,
+        old_artifacts=[old],
+        new_artifacts=[new],
+        new_evidence=[proof],
+    )
+    assert ok.code == RV_OK
+    assert ok.new_evidence == (proof,)
+
+
 def test_old_approve_never_clobbers_a_later_rework() -> None:
     # G2: an APPROVE that sealed the OLD set becomes historical the moment a
     # rework supersedes the set; current_valid_review reads the NEW row only.
@@ -1163,6 +1236,221 @@ async def test_live_record_rework_writes_no_builder_review_verdict(_engine) -> N
                     reviewer_builder_agents={builder_id},
                 )
             assert exc.value.code == "EV_REVIEW_NOT_INDEPENDENT"
+
+
+@pytest.mark.asyncio
+async def test_live_record_rework_rejects_review_kind_new_evidence(_engine) -> None:
+    """I-4 kind-closure / invariant-13 — live, on the real f072 scratch DB.
+
+    Proves BOTH rejection tiers for a caller-supplied ``kind='review'`` row in
+    ``record_rework``'s ``new_evidence``:
+
+    - **Plan tier:** ``record_rework`` runs ``plan_rework`` first, which now
+      rejects any ``kind='review'`` row with RV_INVALID_INPUT (the rework-proof
+      lane is closed to verdict kinds) — the attempt fails closed and persists
+      nothing.
+    - **DAO backstop:** the new-evidence write loop passes
+      ``reviewer_builder_agents={builder_agent_id}`` to
+      ``add_evidence``; a builder-authored ``kind='review'`` row driven through
+      that exact DAO call is rejected live with EV_REVIEW_NOT_INDEPENDENT
+      (invariant 13), whereas the proof row (file_revision) it rides alongside
+      writes cleanly.
+    """
+    from datetime import UTC, datetime
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.dao.artifact_evidence_dao import (
+        ArtifactEvidenceClosedError,
+        artifact_record_dao,
+        evidence_record_dao,
+    )
+    from app.dao.base import tenant_context
+    from app.models.agent import Agent
+    from app.models.artifact_evidence import ArtifactRecord, EvidenceRecord
+    from app.models.task import Task
+    from app.models.tenant import Tenant
+    from app.models.user import User
+    from app.services.review_rework_service import RV_INVALID_INPUT, ReviewReworkService
+
+    try:
+        async with _engine.connect() as conn:
+            await conn.execute(_text("SELECT 1 FROM artifact_records LIMIT 1"))
+    except OperationalError:
+        pytest.skip("artifact_records not provisioned on the scratch DB (run f072)")
+
+    session = AsyncSession(bind=_engine, expire_on_commit=False)
+    svc = ReviewReworkService()
+
+    tenant_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    builder_id = uuid.uuid4()
+    reviewer_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    with tenant_context(tenant_id):
+        async with session.begin():
+            session.add(Tenant(id=tenant_id, name=f"i5-{tenant_id.hex[:6]}", slug=f"i5-{tenant_id.hex[:8]}"))
+            await session.flush()
+            session.add(User(id=user_id, display_name="i5-user", tenant_id=tenant_id))
+            await session.flush()
+            session.add(Agent(id=builder_id, name="i5-builder", creator_id=user_id, tenant_id=tenant_id))
+            session.add(Agent(id=reviewer_id, name="i5-reviewer", creator_id=user_id, tenant_id=tenant_id))
+            session.add(Task(id=task_id, agent_id=builder_id, title="i5-task", created_by=user_id, tenant_id=tenant_id))
+            await session.flush()
+
+    with tenant_context(tenant_id):
+        async with session.begin():
+            old = ArtifactRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                created_by_user=user_id,
+                type="file",
+                title="out.txt",
+                storage_scheme="workspace_path",
+                storage_ref=f"/i5/{tenant_id}/out_v1.txt",
+                content_hash="3" * 64,
+            )
+            old_written = await artifact_record_dao.add_artifact(old, tenant_id=tenant_id, db=session)
+
+            # A REQUEST_CHANGES (fail) verdict by the DISJOINT reviewer.
+            fail_res = await svc.record_review(
+                session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                outcome="fail",
+                reviewer_agent_id=reviewer_id,
+                reviewer_user_id=None,
+                builder_agent_ids=frozenset({builder_id}),
+                current_artifacts=[old_written],
+                cited_artifact_ids=[old_written.id],
+                verdict="needs work",
+                required_changes=["fix the v1 defect"],
+            )
+            assert fail_res.code == "RV_OK"
+            fail_review = fail_res.evidence
+            assert fail_review is not None
+
+            # The rework's proof row (file_revision) and a caller-sneaked
+            # builder-authored kind='review' verdict row riding new_evidence.
+            new_art = ArtifactRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                created_by_user=user_id,
+                type="file",
+                title="out.txt",
+                storage_scheme="workspace_path",
+                storage_ref=f"/i5/{tenant_id}/out_v2.txt",
+                content_hash="4" * 64,
+            )
+            # The evidence rows cite new_art via artifact_id (a real FK, so
+            # the artifact row must exist first — the plan-tier attempt below
+            # writes nothing; this persists the new set for the backstop check).
+            new_art = await artifact_record_dao.add_artifact(new_art, tenant_id=tenant_id, db=session)
+            new_proof = EvidenceRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                artifact_id=new_art.id,
+                created_by_agent=builder_id,
+                kind="file_revision",
+                outcome="pass",
+                subject_ref=f"file://{task_id}",
+                payload={"tests_total": 1, "tests_passed": 1},
+                created_at=datetime(2026, 9, 30, tzinfo=UTC),
+            )
+            sneaked_verdict = EvidenceRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                artifact_id=new_art.id,
+                created_by_agent=builder_id,
+                kind="review",
+                outcome="pass",
+                subject_ref=f"evidence://review/{task_id}",
+                payload={"rework_of": str(fail_review.id), "verdict": "self-approved"},
+                created_at=datetime(2026, 9, 30, tzinfo=UTC),
+            )
+
+            # --- Plan tier: record_rework rejects a kind='review' row in
+            # new_evidence with RV_INVALID_INPUT and persists nothing NEW
+            # (the failed attempt's own rows stay unwritten). ---
+            bad_res = await svc.record_rework(
+                session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                builder_agent_id=builder_id,
+                fail_review=fail_review,
+                old_artifacts=[old_written],
+                new_artifacts=[new_art],
+                new_evidence=[new_proof, sneaked_verdict],
+            )
+            assert bad_res.code == RV_INVALID_INPUT
+            # Exactly ONE review row on the task (the disjoint reviewer's fail):
+            # the attempt's sneaked verdict did not persist.
+            review_rows = (
+                await session.execute(
+                    _text("SELECT count(*) FROM evidence_records WHERE task_id = :t AND kind = 'review'"),
+                    {"t": task_id},
+                )
+            ).scalar_one()
+            assert review_rows == 1
+
+            # --- DAO backstop: the exact write the rework loop performs
+            # (add_evidence with reviewer_builder_agents={builder_agent_id})
+            # rejects the builder-authored kind='review' row live with
+            # EV_REVIEW_NOT_INDEPENDENT, while the proof row writes cleanly. ---
+            with pytest.raises(ArtifactEvidenceClosedError) as exc:
+                await evidence_record_dao.add_evidence(
+                    sneaked_verdict,
+                    tenant_id=tenant_id,
+                    db=session,
+                    reviewer_builder_agents={builder_id},
+                )
+            assert exc.value.code == "EV_REVIEW_NOT_INDEPENDENT"
+            proof_written = await evidence_record_dao.add_evidence(
+                new_proof,
+                tenant_id=tenant_id,
+                db=session,
+                reviewer_builder_agents={builder_id},
+            )
+            assert proof_written.kind == "file_revision"
+
+            # And the normal rework (proof only) still succeeds end-to-end
+            # (fresh rows: the failed attempt persisted nothing).
+            new_art2 = ArtifactRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                created_by_user=user_id,
+                type="file",
+                title="out.txt",
+                storage_scheme="workspace_path",
+                storage_ref=f"/i5/{tenant_id}/out_v3.txt",
+                content_hash="5" * 64,
+            )
+            new_proof2 = EvidenceRecord(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                artifact_id=new_art2.id,
+                created_by_agent=builder_id,
+                kind="file_revision",
+                outcome="pass",
+                subject_ref=f"file://{task_id}",
+                payload={"tests_total": 1, "tests_passed": 1},
+                created_at=datetime(2026, 9, 30, tzinfo=UTC),
+            )
+            ok_res = await svc.record_rework(
+                session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                builder_agent_id=builder_id,
+                fail_review=fail_review,
+                old_artifacts=[old_written],
+                new_artifacts=[new_art2],
+                new_evidence=[new_proof2],
+            )
+            assert ok_res.code == "RV_OK"
+            assert new_art2.id in ok_res.new_artifact_ids
+            assert new_proof2.id in ok_res.new_evidence_ids
 
 
 @pytest.mark.asyncio

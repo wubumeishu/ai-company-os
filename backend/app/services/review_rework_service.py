@@ -326,7 +326,12 @@ def plan_rework(
 
     A rework MUST produce new evidence (I-4): at least one new
     ``test_result`` / ``file_revision`` evidence row bound to the rework
-    execution.
+    execution.  The rework-proof lane is CLOSED to verdict kinds (I-4
+    kind-closure): ``new_evidence`` carries the builder's ``test_result`` /
+    ``file_revision`` proof ONLY — a caller-supplied ``kind='review'`` row is
+    rejected (RV_INVALID_INPUT).  The verdict kind belongs to the review
+    lane: the disjoint reviewer's ``record_review(rework_of=fail_review.id)``
+    (invariant-13 / G4), never the rework-proof lane.
 
     Fail-closed codes: RV_NO_CURRENT_ARTIFACTS (nothing to supersede / no new
     set), RV_NO_SOURCE-style EV codes are raised later by the DAO; here the
@@ -348,6 +353,19 @@ def plan_rework(
             RV_INVALID_INPUT,
             new_artifacts=tuple(new_rows),
             detail="a rework must produce new test_result / file_revision evidence (I-4)",
+        )
+    # I-4 kind-closure — the rework-proof lane is CLOSED to verdict kinds: the
+    # builder's new evidence is test_result / file_revision proof ONLY (design
+    # §3.3 REQUEST_CHANGES->REWORKING + G4 role boundary, §280: a builder "may
+    # write no kind='review' row").  A verdict row must not ride the rework
+    # lane — the re-review VERDICT is the disjoint Reviewer's separate act via
+    # record_review(rework_of=fail_review.id) (invariant-13 / G4).  Reject a
+    # caller-supplied kind='review' row at the closed-code boundary.
+    if any(e.kind == "review" for e in new_evidence_rows):
+        return ReworkPlan(
+            RV_INVALID_INPUT,
+            new_artifacts=tuple(new_rows),
+            detail="new_evidence must not carry kind='review' rows (I-4 kind-closure): the verdict kind rides only the review lane (invariant 13 / G4)",
         )
     # Link each NEW row to the old row it replaces.  When the counts align one
     # for one (a superseding rework), pair them by index; otherwise the new
@@ -636,6 +654,16 @@ class ReviewReworkService:
         ``payload.rework_of`` for G3 provenance).  The rework MUST add new
         ``test_result`` / ``file_revision`` evidence (I-4) or the plan fails
         closed.
+
+        The rework-proof lane is CLOSED to verdict kinds (I-4
+        kind-closure): ``new_evidence`` carries the builder's
+        ``test_result`` / ``file_revision`` proof ONLY.
+        A caller-supplied ``kind='review'`` row is rejected at the plan tier
+        (``plan_rework`` -> RV_INVALID_INPUT) AND, as a defense-in-depth
+        backstop, at the DAO boundary — the new-evidence writes pass
+        ``reviewer_builder_agents={builder_agent_id}`` so a ``kind='review'``
+        row authored by the builder would trip the invariant-13 guard
+        (EV_REVIEW_NOT_INDEPENDENT) instead of persisting.
         """
         plan = plan_rework(
             task_id=task_id,
@@ -659,10 +687,20 @@ class ReviewReworkService:
         new_evidence_ids: list[uuid.UUID] = []
         for row in plan.new_evidence:
             try:
-                # The rework's new proof evidence (test_result / file_revision,
-                # kind != 'review') — no verdict row is written here, so the
-                # invariant-13 reviewer_builder_agents guard does not apply.
-                written = await evidence_record_dao.add_evidence(row, tenant_id=tenant_id, db=db)
+                # Defense-in-depth backstop (invariant 13 / G4): the rework's
+                # new proof evidence (test_result / file_revision, I-4
+                # kind-closure) is written through the SAME invariant-13 guard
+                # as the review lane — the builder who ran the rework is a
+                # builder on this work package, so any kind='review' row that
+                # reached this loop (a caller bypassing the plan tier, or a
+                # future regression) is rejected at the DAO boundary with
+                # EV_REVIEW_NOT_INDEPENDENT instead of persisting.
+                written = await evidence_record_dao.add_evidence(
+                    row,
+                    tenant_id=tenant_id,
+                    db=db,
+                    reviewer_builder_agents={builder_agent_id},
+                )
                 new_evidence_ids.append(written.id)
             except ArtifactEvidenceClosedError as exc:
                 return ReworkOutcome(RV_INVALID_INPUT, detail=f"{exc.code}: {exc.detail}")
